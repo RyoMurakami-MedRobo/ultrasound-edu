@@ -233,7 +233,8 @@ param.focus        = elevfocus;
 param.c            = c;
 param.fs           = fs;
 param.RXdelay      = zeros(1, Nel);
-param.t0           = 0;
+% ※ PARAM.t0 は SIMUS の公式ドキュメントに記載が無いため設定しない。
+%    RF の時間原点は t = 0（sim_engine は out.t0 として別途返す）。
 
 opt = struct('WaitBar', false, 'ParPool', false);
 

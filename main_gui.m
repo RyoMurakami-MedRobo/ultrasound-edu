@@ -33,6 +33,7 @@ app.msB     = NaN;
 app.gx      = [];
 app.gz      = [];
 app.pt      = [0 20e-3];
+app.cursorXZ = [0 20];   % 直近にクリックされたファントム座標 [mm]
 app.playing = false;
 app.animT   = 0;
 
@@ -106,10 +107,12 @@ setStatus(['準備完了。 [1] シミュレーション実行 → [2] ビーム
         gg = section(parent, 'トランスデューサ', repmat({22}, 1, 6));
         lab(gg, '素子数',            1);
         ui.nel   = put(uidropdown(gg, 'Items', {'16','32','64','128','192'}, ...
-                        'Value', '64', 'Editable', 'on'), 1, 2);
+                        'Value', '64', 'Editable', 'on', ...
+                        'ValueChangedFcn', @(s,e) drawPhantom()), 1, 2);
         lab(gg, 'ピッチ [mm]',       2);
         ui.pitch = put(uieditfield(gg, 'numeric', 'Value', 0.30, ...
-                        'Limits', [0.01 5], 'ValueDisplayFormat', '%.3f'), 2, 2);
+                        'Limits', [0.01 5], 'ValueDisplayFormat', '%.3f', ...
+                        'ValueChangedFcn', @(s,e) drawPhantom()), 2, 2);
         lab(gg, '中心周波数 [MHz]',  3);
         ui.fc    = put(uieditfield(gg, 'numeric', 'Value', 5, 'Limits', [0.5 30]), 3, 2);
         lab(gg, '比帯域 -6dB [%]',   4);
@@ -190,11 +193,13 @@ setStatus(['準備完了。 [1] シミュレーション実行 → [2] ビーム
         ui.nz = put(uieditfield(gg, 'numeric', 'Value', 221, 'Limits', [8 1201], ...
                     'RoundFractionalValues', 'on'), 2, 2);
         lab(gg, '横方向範囲 ± [mm]', 3);
-        ui.xhalf = put(uieditfield(gg, 'numeric', 'Value', 12, 'Limits', [1 100]), 3, 2);
+        ui.xhalf = put(uieditfield(gg, 'numeric', 'Value', 12, 'Limits', [1 100], ...
+            'ValueChangedFcn', @(s,e) drawPhantom()), 3, 2);
         lab(gg, '深さ 最小 [mm]', 4);
         ui.zmin = put(uieditfield(gg, 'numeric', 'Value', 3, 'Limits', [0.1 300]), 4, 2);
         lab(gg, '深さ 最大 [mm]', 5);
-        ui.zmax = put(uieditfield(gg, 'numeric', 'Value', 40, 'Limits', [1 400]), 5, 2);
+        ui.zmax = put(uieditfield(gg, 'numeric', 'Value', 40, 'Limits', [1 400], ...
+            'ValueChangedFcn', @(s,e) drawPhantom()), 5, 2);
         lab(gg, '受信 f 値 (0=全開口)', 6);
         ui.fnum = put(uieditfield(gg, 'numeric', 'Value', 1.5, 'Limits', [0 8]), 6, 2);
         lab(gg, '受信アポダイゼーション', 7);
@@ -241,11 +246,14 @@ setStatus(['準備完了。 [1] シミュレーション実行 → [2] ビーム
         ui.axA  = uiaxes(gg);  title(ui.axA,  'アルゴリズム A');
         ui.axB  = uiaxes(gg);  title(ui.axB,  'アルゴリズム B');
 
-        ui.cmPh = uicontextmenu(ui.fig);
+        % メニュー項目を選ぶ頃にはポインタが移動してしまうため、
+        % 右クリックでメニューが開いた瞬間の座標を確定して保持する。
+        ui.cmPh = uicontextmenu(ui.fig, ...
+            'ContextMenuOpeningFcn', @(s,e) captureCursor());
         uimenu(ui.cmPh, 'Text', 'ここに散乱体を追加', ...
-               'MenuSelectedFcn', @(s,e) addScatAtCursor(ui.axPh));
+               'MenuSelectedFcn', @(s,e) menuAddScat());
         uimenu(ui.cmPh, 'Text', '最も近い散乱体を削除', ...
-               'MenuSelectedFcn', @(s,e) delScatAtCursor(ui.axPh));
+               'MenuSelectedFcn', @(s,e) menuDelScat());
     end
 
     %% ---------------- タブ 2: 比較 ----------------
@@ -392,17 +400,36 @@ setStatus(['準備完了。 [1] シミュレーション実行 → [2] ビーム
         ui.tbl.Data = D;
     end
 
+    function menuAddScat()
+        % 匿名関数は生成時の値をキャプチャするため、app の読み出しは
+        % 必ずこの入れ子関数の中で行う（座標が [0 20] に固定されるのを防ぐ）。
+        addScatAt(app.cursorXZ);
+    end
+
+    function menuDelScat()
+        delScatAt(app.cursorXZ);
+    end
+
+    function captureCursor()
+        %CAPTURECURSOR  右クリックでコンテキストメニューが開いた瞬間の座標を保持。
+        cp = ui.axPh.CurrentPoint;
+        app.cursorXZ = cp(1, 1:2);
+    end
+
     function onPhantomClick(ax, ~)
+        cp = ax.CurrentPoint;
+        app.cursorXZ = cp(1, 1:2);
         if strcmp(ui.fig.SelectionType, 'alt')
-            delScatAtCursor(ax);
+            % ContextMenu を割り当てている場合は通常こちらへは来ない
+            % （右クリックはコンテキストメニューに消費される）
+            delScatAt(app.cursorXZ);
         elseif ui.clickAdd.Value
-            addScatAtCursor(ax);
+            addScatAt(app.cursorXZ);
         end
     end
 
-    function addScatAtCursor(ax)
-        cp = ax.CurrentPoint;
-        x = cp(1,1); z = cp(1,2);
+    function addScatAt(xz)
+        x = xz(1); z = xz(2);
         if z <= 0, setStatus('z > 0 の領域をクリックしてください。'); return; end
         ui.tbl.Data = [ui.tbl.Data; x, z, 1];
         ui.preset.Value = 'カスタム';
@@ -410,11 +437,10 @@ setStatus(['準備完了。 [1] シミュレーション実行 → [2] ビーム
         setStatus(sprintf('散乱体を追加: (%.2f, %.2f) mm', x, z));
     end
 
-    function delScatAtCursor(ax)
+    function delScatAt(xz)
         D = ui.tbl.Data;
         if isempty(D), return; end
-        cp = ax.CurrentPoint;
-        d  = hypot(D(:,1) - cp(1,1), D(:,2) - cp(1,2));
+        d  = hypot(D(:,1) - xz(1), D(:,2) - xz(2));
         [dm, k] = min(d);
         if dm > 3
             setStatus('近くに散乱体がありません（3 mm 以内が対象）。'); return;
