@@ -9,7 +9,10 @@ description = "Python port of the Ultrasound DAS Beamforming Explorer (education
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Ryo Murakami" }]
+authors = [
+    { name = "Ryo Murakami", email = "rmurakami@wpi.edu" },
+    { name = "Haichong K. Zhang", email = "hzhang10@wpi.edu" },
+]
 keywords = ["ultrasound", "beamforming", "delay-and-sum", "education"]
 dependencies = [
     "numpy>=1.22",

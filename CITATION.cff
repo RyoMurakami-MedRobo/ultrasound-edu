@@ -5,6 +5,12 @@ type: software
 authors:
   - family-names: Murakami
     given-names: Ryo
+    email: rmurakami@wpi.edu
+    affiliation: "Department of Robotics Engineering, Worcester Polytechnic Institute"
+  - family-names: Zhang
+    given-names: Haichong K.
+    email: hzhang10@wpi.edu
+    affiliation: "Departments of Robotics Engineering, Biomedical Engineering, and Computer Science, Worcester Polytechnic Institute"
 repository-code: "https://github.com/RyoMurakami-MedRobo/ultrasound-edu"
 license: MIT
 version: 1.0.0
@@ -22,6 +28,12 @@ preferred-citation:
   authors:
     - family-names: Murakami
       given-names: Ryo
+      email: rmurakami@wpi.edu
+      affiliation: "Department of Robotics Engineering, Worcester Polytechnic Institute"
+    - family-names: Zhang
+      given-names: Haichong K.
+      email: hzhang10@wpi.edu
+      affiliation: "Departments of Robotics Engineering, Biomedical Engineering, and Computer Science, Worcester Polytechnic Institute"
   year: 2026
   journal: "arXiv preprint"
   notes: "arXiv identifier to be added once submitted; see paper/paper.pdf in this repository for the draft."
