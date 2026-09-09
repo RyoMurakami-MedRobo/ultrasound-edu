@@ -20,7 +20,7 @@ No `.mlapp` file is involved: the interface is plain MATLAB code
 
 ## Demo
 
-![Demo: placing a wire phantom, simulating with MUST, comparing two DAS algorithms, and inspecting the wavefront and delay curve](docs/demo.gif)
+![Demo: placing a wire phantom, simulating with MUST, comparing two DAS algorithms, and inspecting the wavefront and delay curve](docs/demo_mov.mp4)
 
 What the clip shows, in order: the transmit wavefront expanding and the echo
 scattering back on the **Wave animation** tab, then applying a wire-phantom
