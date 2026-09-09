@@ -9,6 +9,13 @@ function**.
 No `.mlapp` file is involved: the interface is plain MATLAB code
 (`uifigure` / `uigridlayout` / `uiaxes`).
 
+> **Python port.** A faithful Python port lives in [`python/`](python/) —
+> same delay laws, reference beamformer, metrics and GUI layout, verified
+> against this MATLAB implementation to floating-point precision. It
+> implements the analytic mock backend only (MUST is MATLAB-only). MATLAB is
+> the source of truth; [`CLAUDE.md`](CLAUDE.md) describes how the two are kept
+> in sync.
+
 ---
 
 ## Demo
@@ -63,6 +70,8 @@ The status bar reports whether MUST was detected. Without it the backend reads
 | `setup_must.m` | Downloads MUST and adds it to the MATLAB path |
 | `validation/validate_must_vs_mock.m` | Quantitative mock-vs-MUST agreement check (see below) |
 | `paper/` | LaTeX source of the accompanying arXiv-style paper |
+| `python/` | Python port of the tool (mock backend only) + parity tests against MATLAB |
+| `CLAUDE.md` | How the MATLAB and Python implementations are kept in sync |
 
 ---
 

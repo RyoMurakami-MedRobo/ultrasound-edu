@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ultrasound-das-explorer"
+version = "1.0.0"
+description = "Python port of the Ultrasound DAS Beamforming Explorer (educational / verification tool for Delay-And-Sum beamforming)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Ryo Murakami" }]
+keywords = ["ultrasound", "beamforming", "delay-and-sum", "education"]
+dependencies = [
+    "numpy>=1.22",
+    "scipy>=1.8",
+]
+
+[project.optional-dependencies]
+gui = ["matplotlib>=3.5"]
+test = ["pytest>=7", "scipy>=1.8"]
+
+[project.scripts]
+ultrasound-das-gui = "ultrasound_das.gui:main"
+
+[project.urls]
+Repository = "https://github.com/RyoMurakami-MedRobo/ultrasound-edu"
+
+[tool.setuptools]
+packages = ["ultrasound_das"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

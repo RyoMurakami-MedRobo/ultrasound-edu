@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Never normalize binary payloads (parity fixtures, images)
+*.mat binary
+*.png binary
+*.pdf binary
+*.gif binary
