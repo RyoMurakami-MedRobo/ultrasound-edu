@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: Murakami
     given-names: Ryo
-repository-code: "https://github.com/RyoMurakami-MedRobo/utrasound-edu"
+repository-code: "https://github.com/RyoMurakami-MedRobo/ultrasound-edu"
 license: MIT
 version: 1.0.0
 date-released: "2026-09-09"
