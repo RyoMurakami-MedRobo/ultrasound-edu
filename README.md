@@ -15,13 +15,13 @@ No `.mlapp` file is involved: the interface is plain MATLAB code
 
 ![Demo: placing a wire phantom, simulating with MUST, comparing two DAS algorithms, and inspecting the wavefront and delay curve](docs/demo.gif)
 
-What the clip shows, in order: applying a wire-phantom preset and switching to
-diverging-wave transmission, running the simulation (backend: MUST) and
-beamforming two algorithms side by side, the difference image / lateral
-profile / metrics table on the **Compare & metrics** tab, the transmit
-wavefront expanding and the echo scattering back on the **Wave animation**
-tab, and finally the exact RF samples a beamformer sums - before and after
-delay correction - on the **Delay curve & alignment** tab.
+What the clip shows, in order: the transmit wavefront expanding and the echo
+scattering back on the **Wave animation** tab, then applying a wire-phantom
+preset and switching to diverging-wave transmission, running the simulation
+(backend: MUST) and beamforming two algorithms side by side, the difference
+image / lateral profile / metrics table on the **Compare & metrics** tab,
+and finally the exact RF samples a beamformer sums - before and after delay
+correction - on the **Delay curve & alignment** tab.
 
 ---
 
