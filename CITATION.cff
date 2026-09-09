@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Ultrasound DAS Beamforming Explorer: An Open Educational Tool for Delay-and-Sum Beamforming"
+type: software
+authors:
+  - family-names: Murakami
+    given-names: Ryo
+repository-code: "https://github.com/RyoMurakami-MedRobo/utrasound-edu"
+license: MIT
+version: 1.0.0
+date-released: "2026-09-09"
+keywords:
+  - ultrasound
+  - beamforming
+  - delay-and-sum
+  - education
+  - MATLAB
+  - MUST
+preferred-citation:
+  type: article
+  title: "Ultrasound DAS Beamforming Explorer: An Open Educational Tool for Delay-and-Sum Beamforming, Validated Against MUST"
+  authors:
+    - family-names: Murakami
+      given-names: Ryo
+  year: 2026
+  journal: "arXiv preprint"
+  notes: "arXiv identifier to be added once submitted; see paper/paper.pdf in this repository for the draft."

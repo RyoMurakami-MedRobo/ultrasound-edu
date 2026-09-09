@@ -19,7 +19,9 @@ No `.mlapp` file is involved: the interface is plain MATLAB code
 | Signal Processing Toolbox | optional | Falls back to an FFT-based analytic signal when `hilbert` is unavailable |
 | MUST | optional | **Everything works without it** — the engine falls back to an analytic mock backend |
 
-MUST is available from <https://www.biomecardio.com/MUST/>.
+MUST is available from <https://www.biomecardio.com/MUST/>, or run `setup_must`
+in this repo to download and add it to the path automatically. MUST is
+licensed separately (LGPLv3) and is not bundled here.
 
 ---
 
@@ -44,6 +46,9 @@ The status bar reports whether MUST was detected. Without it the backend reads
 | `das_reference.m` | Textbook DAS reference implementation |
 | `das_custom_template.m` | Skeleton for user-written algorithms |
 | `wave_animator.m` | Wave propagation, delay curve and alignment drawing |
+| `setup_must.m` | Downloads MUST and adds it to the MATLAB path |
+| `validation/validate_must_vs_mock.m` | Quantitative mock-vs-MUST agreement check (see below) |
+| `paper/` | LaTeX source of the accompanying arXiv-style paper |
 
 ---
 
@@ -217,3 +222,40 @@ what matters when verifying the alignment performed by a DAS beamformer.
 Reconstructing a point scatterer places the peak within one grid cell of the
 truth for plane, focused, diverging and single-element transmits, across
 16 / 32 / 64 / 128 elements and sampling ratios of 4 and 8.
+
+---
+
+## Validation against MUST
+
+`validation/validate_must_vs_mock.m` runs both backends on identical
+transmit/target setups and compares (a) the raw RF channel data via
+normalized cross-correlation and (b) the beamformed images. Requires MUST
+(`setup_must`) and takes about a minute (plus MUST's ~20 s one-time
+per-session initialization). Results are written to `validation/results/`
+(`.csv`, `.mat`, and two figures) and are the numbers reported in the
+accompanying paper (`paper/paper.pdf`). Summary, across 7 cases spanning all
+three transmit schemes, 16/64/128-element probes, and on-/off-axis targets:
+
+| Metric | Result |
+|---|---|
+| Timing alignment (`t0`) | Both backends place the echo within 0.5 samples of the geometric round-trip time; no systematic bias |
+| Raw-RF per-channel correlation | 0.89 - 0.94 (mean 0.92); lower for larger apertures (128 el.) |
+| Cross-correlation lag | Constant ≈ -1.0 sample (≈ -50 ns, confirmed sub-sample via parabolic interpolation), i.e. well under one carrier period at 5 MHz - attributable to the mock's symmetric Gaussian pulse vs. MUST's asymmetric pulse-echo waveform, not a delay-law error |
+| Beamformed peak position | Both backends agree with the known target and with each other to within about one lateral grid cell (≤ 0.14 mm at 12.5 µm grid spacing) |
+| Lateral FWHM, plane/diverging | Mock and MUST agree to within ~10-20% |
+| Lateral FWHM, focused (on-axis) | Mock is ~2.6x narrower than MUST (0.10 vs. 0.26 mm, confirmed at grid spacings from 125 µm to 1.25 µm) - the mock's missing element directivity and finite-aperture diffraction have the largest effect on the most tightly focused beam |
+
+Read this as: **the mock backend is a faithful, timing-accurate stand-in for
+verifying DAS delay-and-sum logic**, but it is not a substitute for MUST (or a
+full diffraction simulator) if the point of the exercise is realistic
+image-quality or resolution assessment - focused-transmit lateral resolution
+in particular should not be trusted quantitatively from the mock backend.
+
+---
+
+## Citing this work
+
+If this tool is useful in teaching or research, please cite it - see
+[`CITATION.cff`](CITATION.cff) or the draft paper in [`paper/`](paper/). This
+project is MIT-licensed (see [`LICENSE`](LICENSE)); MUST itself is licensed
+separately under LGPLv3 by its authors.
