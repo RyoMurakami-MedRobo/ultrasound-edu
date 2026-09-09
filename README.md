@@ -238,12 +238,13 @@ three transmit schemes, 16/64/128-element probes, and on-/off-axis targets:
 
 | Metric | Result |
 |---|---|
-| Timing alignment (`t0`) | Both backends place the echo within 0.5 samples of the geometric round-trip time; no systematic bias |
+| Timing alignment (`t0`) | Both backends place the envelope peak within 0.5 samples of the geometric round-trip time (mock +0.51, MUST -0.49 samples) - no large bias |
 | Raw-RF per-channel correlation | 0.89 - 0.94 (mean 0.92); lower for larger apertures (128 el.) |
-| Cross-correlation lag | Constant ≈ -1.0 sample (≈ -50 ns, confirmed sub-sample via parabolic interpolation), i.e. well under one carrier period at 5 MHz - attributable to the mock's symmetric Gaussian pulse vs. MUST's asymmetric pulse-echo waveform, not a delay-law error |
+| Raw-waveform cross-correlation lag | Constant ≈ -1.0 sample (≈ -50 ns, confirmed sub-sample via parabolic interpolation - see `validation/calibrate_lag_sign.m` for how the sign was pinned down empirically). This is the opposite sign from the `t0` row above, and that is expected, not a contradiction: the `t0` check tracks the pulse *envelope* (group delay), while this tracks alignment of the *carrier oscillations* (phase) in the raw waveform. The two only have to agree if the two backends' pulses are exact time-shifted copies of each other, and they are not (§ below) - both magnitudes are ~1 sample (~50 ns), a quarter of the 200 ns carrier period at 5 MHz, well under anything that would visibly shift an image |
 | Beamformed peak position | Both backends agree with the known target and with each other to within about one lateral grid cell (≤ 0.14 mm at 12.5 µm grid spacing) |
 | Lateral FWHM, plane/diverging | Mock and MUST agree to within ~10-20% |
-| Lateral FWHM, focused (on-axis) | Mock is ~2.6x narrower than MUST (0.10 vs. 0.26 mm, confirmed at grid spacings from 125 µm to 1.25 µm) - the mock's missing element directivity and finite-aperture diffraction have the largest effect on the most tightly focused beam |
+| Lateral FWHM, focused (on-axis) | Mock is ~2.6x narrower than MUST (0.10 vs. 0.26 mm, confirmed converged at grid spacings from 125 µm to 1.25 µm). A rule-of-thumb diffraction estimate ((f-number)×λ ≈ 1.5×0.308 mm ≈ 0.46 mm) is already looser than MUST's value and roughly 4-5x looser than the mock's - i.e. the mock's mainlobe is tighter than a simple diffraction bound allows, independent of trusting MUST as ground truth. Attributed to the mock's missing element directivity and finite-aperture diffraction |
+| Lateral FWHM, 16-element probe | Mock is *wider* than MUST here (2.04 vs. 1.61 mm) - the opposite direction from the focused-on-axis row above. This is a different regime, not the same effect: a 16-element, 0.30 mm-pitch array is only 4.5 mm wide, short of the 13.3 mm an f/1.5 receive aperture would want at 20 mm depth, so the aperture is clipped to the full array (effective f-number ≈ 4.4). We did not investigate this regime's mock-vs-MUST discrepancy further |
 
 Read this as: **the mock backend is a faithful, timing-accurate stand-in for
 verifying DAS delay-and-sum logic**, but it is not a substitute for MUST (or a

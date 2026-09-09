@@ -280,7 +280,12 @@ we measure:
   the sub-sample lag obtained by parabolic interpolation of the three
   \code{xcorr} samples around the integer-lag peak (\code{xcorr} itself only
   returns integer lags, so this step distinguishes a genuine near-integer
-  offset from a quantized fractional one).
+  offset from a quantized fractional one). The sign convention of the
+  reported lag (which of the two backends a negative value means is
+  earlier) is pinned down empirically, on a synthetic pair of signals with
+  a hand-constructed known delay, by
+  \code{validation/calibrate\_lag\_sign.m}, rather than assumed from
+  \code{xcorr}'s documented convention.
   \item \textbf{Beamformed-image agreement.} Both RF data sets are
   beamformed with the identical reference implementation
   (\code{das\_reference.m}) on a common grid, and we report the Euclidean
@@ -330,30 +335,40 @@ a single function call.
 
 \paragraph{Timing.} For a plane wave with an on-axis target at 20\,mm depth
 ($c=1540$\,m/s, expected two-way time $25.974\,\mu$s at the center element),
-the mock backend's envelope peak fell at $+0.51$ samples and \must's at
-$-0.49$ samples relative to the geometric expectation --- opposite signs, of
-comparable magnitude, i.e.\ no systematic bias in either direction. This
-confirms that $t_0 = 0$ (the convention both \code{sim\_engine} and the
-\must{} adapter use) is correct for both backends.
+the mock backend's \emph{envelope} peak fell at $+0.51$ samples and \must's
+at $-0.49$ samples relative to the geometric expectation, i.e.\ the mock's
+envelope peak is about $1.00$ sample \emph{later} than \must's, and both are
+within one sample of the geometric prediction. This confirms that $t_0 = 0$
+(the convention both \code{sim\_engine} and the \must{} adapter use) is
+correct for both backends, with no large systematic bias.
 
 \paragraph{Raw-RF agreement.} Table~\ref{tab:results} reports, per case, the
-mean per-channel peak correlation and the center-channel sub-sample lag.
-The mean correlation across all seven cases is $0.916$ (range $0.894$--$0.940$);
-it is lowest for the 128-element probe, the direction in which the mock's
-missing diffraction and directivity terms would be expected to matter most.
-The sub-sample lag is consistently close to $-1.0$ samples ($-50$\,ns at
+mean per-channel peak correlation and the center-channel sub-sample lag,
+obtained by cross-correlating the \emph{raw} (non-envelope) waveforms and
+locating the peak with the sign convention verified empirically as
+described above. The mean correlation across all
+seven cases is $0.916$ (range $0.894$--$0.940$); it is lowest for the
+128-element probe, the direction in which the mock's missing diffraction and
+directivity terms would be expected to matter most. The raw-waveform
+cross-correlation lag is consistently close to $-1.0$ samples ($-50$\,ns at
 $f_s=20$\,MHz) across every scheme and element count (mean $-1.02$, range
-$-1.08$ to $-0.94$), i.e.\ the mock backend's echo arrives about one sample
-ahead of \must's. Since $-50$\,ns is a quarter of one carrier period at
-5\,MHz, this is well below anything that would perceptibly shift a
-reconstructed image, and is consistent with the two backends using
-different pulse-echo waveforms (a symmetric Gaussian-modulated sinusoid for
-the mock vs.\ \must's simulated pulse-echo response, visibly less symmetric
-in Fig.~\ref{fig:rf-compare}) rather than with a delay-law disagreement.
-Figure~\ref{fig:rf-compare} (top) shows this directly: the two traces peak
-at the same time and have comparable envelopes, but visibly different fine
-structure, which is exactly the decomposition the correlation coefficient
-and the lag measurement, together, are designed to separate.
+$-1.08$ to $-0.94$), meaning the mock's raw waveform \emph{fine structure}
+best aligns with \must's about one sample \emph{earlier} --- the opposite
+sign from the envelope-peak comparison above, and this is expected rather
+than contradictory: the two measurements probe different things. The
+envelope-peak time tracks the pulse's group delay; the raw-waveform
+cross-correlation lag tracks the alignment of its carrier oscillations
+(phase). The two agree only when both signals are exact time-shifted copies
+of one another. Figure~\ref{fig:rf-compare} (top) shows they are not: mock
+uses a symmetric Gaussian-modulated sinusoid, \must{} a simulated
+pulse-echo response with visibly different, less symmetric fine structure,
+so a comparison keyed to the carrier phase (cross-correlation of the raw
+waveform) and one keyed to the pulse envelope can disagree in sign while
+both report a magnitude of about one sample. One sample is $50$\,ns, a
+quarter of the $200$\,ns carrier period at 5\,MHz in either case --- well
+below anything that would perceptibly shift a reconstructed image, and
+consistent with a pulse-shape difference between the two backends rather
+than with a delay-law disagreement.
 
 \paragraph{Beamformed-image agreement.} Peak positions agree with the known
 target and with each other to within about one lateral grid cell at the
@@ -371,11 +386,25 @@ of $2.6\times$, confirmed converged from 125\,\textmu m down to
 element directivity and finite-aperture diffraction, whose effect is
 largest for the most tightly focused beam and comparatively minor for plane
 and diverging transmission, where the beam is less concentrated to begin
-with. The 16-element case also shows a substantial absolute difference
-($2.04$ vs.\ $1.61$\,mm), but here the mainlobe is wide enough (spanning
-$\sim$160 grid cells at the fine spacing) that the discrepancy is not a
-grid artefact and instead reflects the same missing-diffraction effect
-acting on a small, strongly diffraction-limited aperture.
+with. As a rough independent check, the common rule-of-thumb approximation
+for diffraction-limited lateral resolution, (f-number)$\times\lambda$, gives
+$1.5 \times 0.308\,\mathrm{mm} \approx 0.46$\,mm for this probe and depth:
+\must's $0.26$\,mm is already narrower than this order-of-magnitude estimate
+(consistent with the coherent narrowing a two-way, dynamically-focused-on-
+receive pulse-echo beam achieves relative to a simple one-way estimate),
+while the mock's $0.10$\,mm is roughly $4$--$5\times$ narrower than the
+rule-of-thumb value --- a mainlobe tighter than a simple diffraction
+estimate would allow, independent of whether \must{} is taken as ground
+truth. The 16-element case shows a different kind of discrepancy
+($2.04$ vs.\ $1.61$\,mm mock vs.\ \must, mock \emph{wider} here rather than
+narrower): with only 16 elements at 0.30\,mm pitch, the physical aperture is
+4.5\,mm, well short of the 13.3\,mm the requested f/1.5 receive aperture
+would want at 20\,mm depth, so the receive aperture is clipped to the full
+array and the effective f-number is $\approx 4.4$, not $1.5$. This is a
+distinct, aperture-limited regime rather than the same directivity effect
+seen in the focused case (there, the 64-element, 18.9\,mm aperture is not
+clipped), and we did not investigate the mock-vs-\must{} discrepancy in this
+regime further.
 
 \paragraph{Run time.} Excluding \must's approximately 20\,s one-time
 per-session initialization cost (measured on the first \textsc{simus} call

@@ -33,6 +33,15 @@ function results = validate_must_vs_mock(varargin)
 %
 %   See also SIM_ENGINE, DAS_REFERENCE, SETUP_MUST.
 
+% Make sure the repo root (sim_engine.m, das_reference.m, ...) is on the
+% path even when this function is called from inside validation/ or from
+% an arbitrary working directory, so `cd validation; validate_must_vs_mock`
+% (or calling it from anywhere after `addpath(genpath(<repo>))`) both work.
+repoRoot = fileparts(fileparts(mfilename('fullpath')));
+if isempty(which('sim_engine'))
+    addpath(repoRoot);
+end
+
 p = inputParser();
 p.addParameter('OutDir', fullfile(fileparts(mfilename('fullpath')), 'results'));
 p.parse(varargin{:});
