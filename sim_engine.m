@@ -1,66 +1,75 @@
 function out = sim_engine(cfg)
-%SIM_ENGINE  トランスデューサ／送信シーケンス／散乱体設定から RF データを生成する。
+%SIM_ENGINE  Generate RF data from a transducer / transmit / scatterer setup.
 %
 %   out = SIM_ENGINE(cfg)
 %
-%   MUST (Matlab UltraSound Toolbox) の SIMUS をバックエンドとして使用する。
-%   MUST が検出できない場合は、解析的な円筒波モデル（モック）に自動的に
-%   フォールバックするため、MUST 未インストール環境でも GUI の全機能を
-%   動作確認できる。
+%   Uses SIMUS from MUST (Matlab UltraSound Toolbox) as the backend. When MUST
+%   cannot be found, the function automatically falls back to an analytic
+%   cylindrical-wave model (the "mock" backend), so the whole GUI remains
+%   usable on machines where MUST is not installed.
 %
-%   ---- 座標系 ---------------------------------------------------------
-%   x : アレイに平行（左端素子 → 右端素子の向きが +x）、アレイ中心が x = 0
-%   z : アレイに垂直で下向き（深さ方向）。素子は z = 0 上に並ぶ。
-%   ステアリング角 theta は z 軸から測り、+x 側へ振る向きを正とする。
+%   ---- Coordinate system ----------------------------------------------
+%   x : parallel to the array, pointing from the first (leftmost) element to
+%       the last (rightmost) element. x = 0 at the array centre.
+%   z : perpendicular to the array, pointing downward (depth). Elements lie
+%       on z = 0.
+%   The steering angle theta is measured from the z axis and is positive
+%   towards +x.
 %
-%   ---- 入力 cfg -------------------------------------------------------
-%   cfg.probe.Nelements   素子数                          (既定 64)
-%   cfg.probe.pitch       ピッチ [m]                      (既定 0.30e-3)
-%   cfg.probe.fc          中心周波数 [Hz]                 (既定 5e6)
-%   cfg.probe.bandwidth   -6dB 比帯域 [%]                 (既定 75)
-%   cfg.probe.kerf        素子間隙 [m]                    (既定 pitch*0.1)
-%   cfg.probe.height      素子高さ [m]                    (既定 5e-3)
-%   cfg.probe.elevfocus   エレベーション焦点 [m]          (既定 20e-3)
-%   cfg.medium.c          音速 [m/s]                      (既定 1540)
-%   cfg.acq.fs_factor     fs = fs_factor * fc             (既定 4、>=4 を推奨)
+%   ---- Input: cfg -----------------------------------------------------
+%   cfg.probe.Nelements   number of elements                (default 64)
+%   cfg.probe.pitch       element pitch [m]                 (default 0.30e-3)
+%   cfg.probe.fc          centre frequency [Hz]             (default 5e6)
+%   cfg.probe.bandwidth   -6 dB fractional bandwidth [%]    (default 75)
+%   cfg.probe.kerf        kerf [m]                          (default pitch*0.1)
+%   cfg.probe.height      element height [m]                (default 5e-3)
+%   cfg.probe.elevfocus   elevation focus [m]               (default 20e-3)
+%   cfg.medium.c          speed of sound [m/s]              (default 1540)
+%   cfg.acq.fs_factor     fs = fs_factor * fc               (default 4, >= 4)
 %   cfg.tx.scheme         'plane' | 'focused' | 'diverging'
-%   cfg.tx.angle_deg      ステアリング角 [deg]            (既定 0)
-%   cfg.tx.focus_mm       集束深度 [mm]。複数指定でマルチフォーカス送信
-%                         （送信イベントを深度ごとに分けて生成する）
-%   cfg.tx.src_mm         発散波の仮想音源深度 [mm]（正値、実際は z<0 に配置）
-%   cfg.tx.single_element 単一素子送信なら true           (既定 false)
-%   cfg.tx.element_index  単一素子送信で励振する素子番号  (既定 中央)
-%   cfg.scat.x/.z/.rc     散乱体の x,z 座標 [m] と反射強度（同サイズのベクトル）
-%   cfg.recon.zmax        記録したい最大深度 [m]          (既定 40e-3)
-%   cfg.options.force_mock  true で MUST があってもモックを使う (既定 false)
+%   cfg.tx.angle_deg      steering angle [deg]              (default 0)
+%   cfg.tx.focus_mm       focal depth(s) [mm]. Several values request a
+%                         multi-focus sequence (one transmit event each).
+%   cfg.tx.src_mm         virtual source depth [mm] for diverging waves
+%                         (positive value; the source is placed at z < 0)
+%   cfg.tx.single_element true for single-element transmit  (default false)
+%   cfg.tx.element_index  element fired in single-element mode (default centre)
+%   cfg.scat.x/.z/.rc     scatterer x, z [m] and reflection coefficients
+%                         (vectors of equal length)
+%   cfg.recon.zmax        maximum depth to record [m]       (default 40e-3)
+%   cfg.options.force_mock  true to use the mock backend even if MUST exists
 %
-%   ---- 出力 out -------------------------------------------------------
-%   out.RF      [Nt x Nelements x Ntx] RF データ。**時間は列方向（第1次元）**、
-%               列インデックスが受信素子番号。第3次元が送信イベント。
-%   out.t0      RF 第1サンプルの時刻 [s]（本エンジンでは常に 0）
-%   out.fs      サンプリング周波数 [Hz]
-%   out.c       音速 [m/s]
-%   out.time    [Nt x 1] 時間軸 = t0 + (0:Nt-1)/fs
-%   out.rx_pos  [1 x Nelements] 受信素子の x 座標 [m]（z = 0）
-%   out.tx      [1 x Ntx] struct 配列。ビームフォーマへ渡す tx_info。
-%   out.backend 'MUST' もしくは 'mock'
-%   out.elapsed シミュレーション所要時間 [s]
+%   ---- Output: out ----------------------------------------------------
+%   out.RF      [Nt x Nelements x Ntx] RF data. **Time runs along the first
+%               dimension**, columns are receive elements, the third
+%               dimension indexes transmit events.
+%   out.t0      time of the first RF sample [s] (always 0 in this engine)
+%   out.fs      sampling frequency [Hz]
+%   out.c       speed of sound [m/s]
+%   out.time    [Nt x 1] time axis = t0 + (0:Nt-1)/fs
+%   out.rx_pos  [1 x Nelements] receive element x coordinates [m]
+%   out.tx      [1 x Ntx] struct array holding the tx_info of each event
+%   out.backend 'MUST' or 'mock'
+%   out.elapsed simulation time [s]
 %
-%   tx_info の各フィールド（DAS 実装が参照する契約）:
-%     .delays   [1 x Nel] 送信遅延 [s]（非励振素子は NaN、min(有効)=0 に正規化）
-%     .apod     [1 x Nel] 送信アポダイゼーション（非励振素子は 0）
-%     .elem_x   [1 x Nel] 送信素子 x 座標 [m]
-%     .elem_z   [1 x Nel] 送信素子 z 座標 [m]（線形アレイなので全て 0）
-%     .t0       RF 第1サンプルの時刻 [s]
-%     .c,.fc,.fs 音速・中心周波数・サンプリング周波数
-%     .fnumber  受信 f 値（0 で全開口）。※統一 I/F に引数が無いためここで渡す
-%     .rx_apod  受信アポダイゼーション 'rect' | 'hann'
-%     .scheme,.angle_deg,.focus_mm  送信条件（表示・注釈用）
-%     .src_xz   [x z] 集束点／仮想音源の座標 [m]（教育用オーバーレイに使用）
+%   Fields of tx_info (the contract every DAS implementation relies on):
+%     .delays   [1 x Nel] transmit delays [s] (NaN on inactive elements,
+%               normalised so that min(active) = 0)
+%     .apod     [1 x Nel] transmit apodisation (0 on inactive elements)
+%     .elem_x   [1 x Nel] transmit element x coordinates [m]
+%     .elem_z   [1 x Nel] transmit element z coordinates [m] (0 for a linear
+%               array)
+%     .t0       time of the first RF sample [s]
+%     .c,.fc,.fs  speed of sound, centre frequency, sampling frequency
+%     .fnumber  receive f-number (0 means full aperture). The unified DAS
+%               interface has no argument for it, so it travels in here.
+%     .rx_apod  receive apodisation, 'rect' or 'hann'
+%     .scheme,.angle_deg,.focus_mm  transmit settings (for display/annotation)
+%     .src_xz   [x z] focal point or virtual source [m] (used by the animator)
 %
 %   See also DAS_REFERENCE, DAS_CUSTOM_TEMPLATE, WAVE_ANIMATOR, MAIN_GUI.
 
-%% ---------------- 既定値の展開 ----------------
+%% ---------------- Defaults ----------------
 if nargin < 1 || isempty(cfg), cfg = struct(); end
 
 probe   = getsub(cfg, 'probe');
@@ -88,16 +97,16 @@ validateattributes(pitch, {'numeric'},{'scalar','positive','finite'},mfilename,'
 validateattributes(fc,    {'numeric'},{'scalar','positive','finite'},mfilename,'fc');
 if fsFactor < 4
     warning('sim_engine:lowFs', ...
-        ['fs_factor = %.2f は小さすぎます（fs = %.2f*fc）。補間ベースの DAS で ' ...
-         'エイリアシングが生じます。4 以上を推奨します。'], fsFactor, fsFactor);
+        ['fs_factor = %.2f is too low (fs = %.2f*fc). The interpolation-based ' ...
+         'DAS will alias. A value of 4 or more is recommended.'], fsFactor, fsFactor);
 end
 fs = fsFactor * fc;
 
-% 素子座標（アレイ中心が x = 0）
+% Element coordinates (array centred on x = 0)
 elem_x = ((0:Nel-1) - (Nel-1)/2) * pitch;
 elem_z = zeros(1, Nel);
 
-%% ---------------- 送信シーケンスの構築 ----------------
+%% ---------------- Transmit sequence ----------------
 scheme   = lower(getdef(tx, 'scheme', 'plane'));
 angleDeg = getdef(tx, 'angle_deg', 0);
 theta    = angleDeg * pi/180;
@@ -106,16 +115,16 @@ elIdx    = getdef(tx, 'element_index', round((Nel+1)/2));
 
 switch scheme
     case 'plane'
-        srcDepths = NaN;                                   % 焦点なし
+        srcDepths = NaN;                                   % no focal point
     case 'focused'
         fmm = getdef(tx, 'focus_mm', 20);
-        srcDepths = fmm(:).' * 1e-3;                       % 正 = 集束
+        srcDepths = fmm(:).' * 1e-3;                       % positive = focused
         srcDepths(srcDepths <= 0) = 1e-3;
     case 'diverging'
         smm = getdef(tx, 'src_mm', 10);
-        srcDepths = -abs(smm(1)) * 1e-3;                   % 負 = 仮想音源
+        srcDepths = -abs(smm(1)) * 1e-3;                   % negative = virtual source
     otherwise
-        error('sim_engine:scheme', '未知の送信モード "%s" です。', scheme);
+        error('sim_engine:scheme', 'Unknown transmit scheme "%s".', scheme);
 end
 
 Ntx = numel(srcDepths);
@@ -139,20 +148,20 @@ for k = 1:Ntx
     txArr(k).single_element = singleEl;
 end
 
-%% ---------------- 散乱体 ----------------
+%% ---------------- Scatterers ----------------
 xs = getdef(scat, 'x', 0);   xs = xs(:).';
 zs = getdef(scat, 'z', 20e-3); zs = zs(:).';
 rc = getdef(scat, 'rc', 1);  rc = rc(:).';
 if isscalar(rc) && numel(xs) > 1, rc = repmat(rc, 1, numel(xs)); end
 assert(isequal(numel(xs), numel(zs), numel(rc)), ...
-    'sim_engine:scat', '散乱体の x, z, rc は同じ要素数である必要があります。');
+    'sim_engine:scat', 'Scatterer x, z and rc must have the same number of elements.');
 keep = isfinite(xs) & isfinite(zs) & isfinite(rc) & zs > 0;
 xs = xs(keep); zs = zs(keep); rc = rc(keep);
 if isempty(xs)
-    xs = 0; zs = max(zmax/2, 1e-3); rc = 0;      % 空ファントムでも RF 長を確保
+    xs = 0; zs = max(zmax/2, 1e-3); rc = 0;      % keep a valid record length
 end
 
-%% ---------------- 記録長の決定 ----------------
+%% ---------------- Record length ----------------
 apHalf  = max(abs(elem_x)) + pitch;
 zrec    = max([zmax, max(zs)]) * 1.05;
 sigma   = pulseSigma(fc, bandwidth);
@@ -161,7 +170,7 @@ Tend    = maxDel + 2*hypot(zrec, 2*apHalf)/c + 8*sigma;
 Nt      = max(64, ceil(Tend*fs));
 tvec    = (0:Nt-1).'/fs;
 
-%% ---------------- バックエンド選択 ----------------
+%% ---------------- Backend selection ----------------
 hasMUST = ~isempty(which('simus')) && ~isempty(which('pfield'));
 useMUST = hasMUST && ~forceMock;
 
@@ -173,7 +182,7 @@ if useMUST
         backend = 'MUST';
     catch ME
         warning('sim_engine:mustFailed', ...
-            'MUST(simus) の実行に失敗したためモックに切り替えます: %s', ME.message);
+            'SIMUS from MUST failed, switching to the mock backend: %s', ME.message);
         RF = runMock(xs, zs, rc, txArr, elem_x, elem_z, c, fc, sigma, tvec);
         backend = 'mock (MUST failed)';
     end
@@ -187,11 +196,11 @@ else
 end
 elapsed = toc;
 
-% 振幅を正規化（バックエンド間で表示スケールを揃える）
+% Normalise the amplitude so both backends share the same display scale
 pk = max(abs(RF(:)));
 if pk > 0, RF = RF / pk; end
 
-%% ---------------- 出力 ----------------
+%% ---------------- Output ----------------
 out = struct();
 out.RF      = RF;
 out.t0      = 0;
@@ -209,15 +218,19 @@ out.scat    = struct('x',xs,'z',zs,'rc',rc);
 end % sim_engine
 
 %% ======================================================================
-%  MUST アダプタ（MUST 依存コードはこの関数の中だけに閉じ込める）
+%  MUST adapter (all MUST-specific code lives inside this function)
 %  ----------------------------------------------------------------------
-%  検証済みの呼び出し規約（biomecardio.com / MUST 公式ドキュメント）:
-%    RF = SIMUS(X,Z,RC,DELAYS,PARAM)   % 2-D 構文。RF の列数 = 素子数
-%    PARAM.fc, PARAM.pitch, PARAM.width または kerf は必須
-%    PARAM.fs 既定 = 4*fc、PARAM.bandwidth はパルスエコー -6dB 比帯域 [%]
-%    PARAM.c 既定 1540、PARAM.TXapodization、PARAM.RXdelay 既定 0
-%    時間原点は t = 0（例示コードが t = (0:size(RF,1)-1)/param.fs を使用）
-%  MUST のバージョン差で引数が変わった場合はここだけを直せばよい。
+%  Calling conventions verified against the official MUST documentation
+%  (biomecardio.com):
+%    RF = SIMUS(X,Z,RC,DELAYS,PARAM)   % 2-D syntax; RF has one column per element
+%    PARAM.fc, PARAM.pitch and PARAM.width or kerf are required
+%    PARAM.fs defaults to 4*fc; PARAM.bandwidth is the pulse-echo -6 dB
+%    fractional bandwidth in %; PARAM.c defaults to 1540;
+%    PARAM.TXapodization and PARAM.RXdelay default to none / 0.
+%    The time origin is t = 0 (the documented examples build their time axis
+%    as t = (0:size(RF,1)-1)/param.fs).
+%  If a future MUST release changes the argument order, this is the only
+%  place that needs editing.
 %% ======================================================================
 function RF = runMUST(xs, zs, rc, txArr, Nel, pitch, kerf, fc, bandwidth, ...
                       height, elevfocus, c, fs, Nt)
@@ -233,8 +246,8 @@ param.focus        = elevfocus;
 param.c            = c;
 param.fs           = fs;
 param.RXdelay      = zeros(1, Nel);
-% ※ PARAM.t0 は SIMUS の公式ドキュメントに記載が無いため設定しない。
-%    RF の時間原点は t = 0（sim_engine は out.t0 として別途返す）。
+% PARAM.t0 is deliberately not set: it is not listed among the SIMUS
+% parameters. The RF time origin is t = 0 and sim_engine reports it as out.t0.
 
 opt = struct('WaitBar', false, 'ParPool', false);
 
@@ -243,12 +256,12 @@ RFc = cell(1, Ntx);
 for k = 1:Ntx
     d = txArr(k).delays;
     a = txArr(k).apod;
-    d(~isfinite(d)) = 0;                 % 非励振素子は遅延 0 + apod 0 で無効化
+    d(~isfinite(d)) = 0;             % inactive elements: delay 0 and apodisation 0
     param.TXapodization = a;
     RFc{k} = simus(xs, zs, rc, d, param, opt);
 end
 
-% 送信イベント間で行数が揃わないことがあるためゼロ詰めして連結する
+% Transmit events may return different row counts, so zero-pad before stacking
 Nrow = max([Nt, cellfun(@(r) size(r,1), RFc)]);
 RF = zeros(Nrow, Nel, Ntx);
 for k = 1:Ntx
@@ -257,12 +270,15 @@ end
 end
 
 %% ======================================================================
-%  モックバックエンド（MUST 非依存の解析的 2-D 円筒波モデル）
-%  各散乱体について
-%     (1) 全送信素子から届く球面波を重ね合わせて散乱体位置の場を作り
-%     (2) その場を受信素子まで再度伝搬させて RF に加算する
-%  回折・素子指向性の厳密モデルは持たないが、遅延構造は物理的に正しいので
-%  DAS の整相を検証する目的には十分。
+%  Mock backend: analytic 2-D cylindrical-wave model, no MUST required.
+%  For every scatterer it
+%     (1) superimposes the spherical waves radiated by all active transmit
+%         elements to build the field at the scatterer, and
+%     (2) propagates that field back to each receive element and adds it to
+%         the RF matrix.
+%  Diffraction and element directivity are not modelled rigorously, but the
+%  delay structure is physically exact, which is what matters when verifying
+%  the alignment performed by a DAS beamformer.
 %% ======================================================================
 function RF = runMock(xs, zs, rc, txArr, elem_x, elem_z, c, fc, sigma, tvec)
 Nel  = numel(elem_x);
@@ -281,13 +297,13 @@ for k = 1:Ntx
     for is = 1:numel(xs)
         if rc(is) == 0, continue; end
 
-        % --- (1) 送信: 散乱体位置での場 ------------------------------
+        % --- (1) Transmit: field at the scatterer --------------------
         rt   = hypot(xs(is) - elem_x(act), zs(is) - elem_z(act));   % 1 x Nact
         taut = txd(act) + rt/c;
-        ampt = apo(act) .* (zs(is)./rt) ./ sqrt(rt);                % 斜入射 + 円筒拡散
+        ampt = apo(act) .* (zs(is)./rt) ./ sqrt(rt);   % obliquity + cylindrical spread
         sfield = gpulse(tvec - taut, fc, sigma) * ampt(:);          % Nt x 1
 
-        % --- (2) 受信: 各素子への再伝搬 ------------------------------
+        % --- (2) Receive: propagate back to every element ------------
         rr    = hypot(xs(is) - elem_x, zs(is) - elem_z);            % 1 x Nel
         ampr  = (zs(is)./rr) ./ sqrt(rr);
         pos   = ((tvec - rr/c) - tvec(1)) * fs + 1;                 % Nt x Nel
@@ -305,23 +321,24 @@ end
 end
 
 %% ======================================================================
-%  補助関数
+%  Helpers
 %% ======================================================================
 function [d, a, srcxz] = txLaw(elem_x, c, theta, srcDepth, scheme, singleEl, elIdx)
-%TXLAW  送信遅延則。焦点／仮想音源はビーム軸上 D*(sin th, cos th) に置く。
+%TXLAW  Transmit delay law. The focal point / virtual source sits on the beam
+%  axis at D*(sin theta, cos theta).
 Nel = numel(elem_x);
 a = ones(1, Nel);
 if strcmp(scheme, 'plane') || ~isfinite(srcDepth)
-    d = elem_x * sin(theta) / c;                 % 平面波
+    d = elem_x * sin(theta) / c;                 % plane wave
     srcxz = [NaN NaN];
 else
     Px = srcDepth * sin(theta);
     Pz = srcDepth * cos(theta);
     R  = hypot(elem_x - Px, Pz);
     if srcDepth > 0
-        d = (max(R) - R) / c;                    % 集束波（外側が先に発射）
+        d = (max(R) - R) / c;                    % focused (outer elements fire first)
     else
-        d = (R - min(R)) / c;                    % 発散波（仮想音源から等距離）
+        d = (R - min(R)) / c;                    % diverging (equidistant from source)
     end
     srcxz = [Px Pz];
 end
@@ -333,8 +350,8 @@ if singleEl
     srcxz = [elem_x(elIdx) 0];
 end
 
-d = d - min(d(isfinite(d)));                     % min(有効遅延) = 0 に正規化
-d(a == 0) = NaN;                                 % 非励振素子は NaN
+d = d - min(d(isfinite(d)));                     % normalise so min(active) = 0
+d(a == 0) = NaN;                                 % NaN marks inactive elements
 end
 
 function s = makeEmptyTx()
@@ -344,13 +361,14 @@ s = struct('delays',[],'apod',[],'elem_x',[],'elem_z',[],'t0',0,'c',1540, ...
 end
 
 function sigma = pulseSigma(fc, bwPercent)
-%PULSESIGMA  比帯域 [%] からガウス包絡の標準偏差 [s] を求める。
+%PULSESIGMA  Gaussian envelope standard deviation [s] for a given fractional
+%  bandwidth [%].
 bw = max(bwPercent, 1)/100;
 sigma = sqrt(2*log(2)) / (pi * fc * bw);
 end
 
 function y = gpulse(t, fc, sigma)
-%GPULSE  ガウス変調正弦パルス。
+%GPULSE  Gaussian-modulated sinusoidal pulse.
 y = exp(-0.5*(t/sigma).^2) .* cos(2*pi*fc*t);
 end
 

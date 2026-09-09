@@ -1,45 +1,48 @@
 function [bmode_img, delays] = das_custom_template(rf_data, tx_info, rx_pos, grid_x, grid_z, sound_speed, fs)
-%DAS_CUSTOM_TEMPLATE  ユーザーが自作 DAS を書くためのひな形。
+%DAS_CUSTOM_TEMPLATE  Skeleton for writing your own DAS beamformer.
 %
 %   [bmode_img, delays] = DAS_CUSTOM_TEMPLATE(rf_data, tx_info, rx_pos, ...
 %                                             grid_x, grid_z, sound_speed, fs)
 %
-%   ■ 使い方
-%     1) このファイルを好きな名前（例: my_das.m）でコピーする。
-%     2) 関数名をファイル名に合わせて変更する。
-%     3) 下の【STEP 1】〜【STEP 5】を書き換える。
-%     4) MAIN_GUI の「Custom function」欄にその関数名を入力し、
-%        アルゴリズム選択で "Custom" を選ぶと参照実装と比較できる。
+%   HOW TO USE
+%     1) Copy this file under a name of your choice (e.g. my_das.m).
+%     2) Rename the function so it matches the file name.
+%     3) Edit [STEP 1] ... [STEP 5] below.
+%     4) Type that name into the "Custom function" field of MAIN_GUI and pick
+%        "Custom DAS" as algorithm A or B to compare it with the reference.
 %
-%   ■ 守るべき契約（これを外すと比較・評価が破綻する）
-%     - 引数の順序と意味は DAS_REFERENCE と完全に同一にすること。
-%     - rf_data は [Nt x Nel]（時間が第1次元、列が受信素子）。
-%     - bmode_img は [numel(grid_z) x numel(grid_x)] の **線形エンベロープ**
-%       （対数圧縮しない）。サイズが違うと差分画像・MSE がエラーになる。
-%     - delays は [Npix x Nel] の **往復合計時間 [s]**。加算対象外は NaN。
-%       nargout < 2 のときは計算をスキップしてよい（実行時間計測を汚さない）。
-%     - グリッドは列優先（画素 k = reshape 後の linear index）で並べる。
+%   CONTRACT (breaking it breaks the comparison and the metrics)
+%     - Keep the argument order and meaning identical to DAS_REFERENCE.
+%     - rf_data is [Nt x Nel] (time along the first dimension, columns are
+%       receive elements).
+%     - bmode_img must be [numel(grid_z) x numel(grid_x)] and must be the
+%       **linear envelope** (no log compression). A wrong size makes the
+%       difference image and the MSE fail.
+%     - delays must be [Npix x Nel] holding the **total two-way time [s]**,
+%       with NaN wherever a sample is not summed. Skip it when nargout < 2.
+%     - Pixels are ordered column-major (the linear index after reshape).
 %
-%   ■ 初期状態
-%     すぐ動くように「最近傍サンプリング + 矩形アポダイゼーション」の
-%     素朴な DAS を実装してある。参照実装（線形補間）との差分画像を見ると
-%     補間誤差がサイドローブ状の残差として現れることが確認できる。
+%   INITIAL STATE
+%     A deliberately naive DAS (nearest-neighbour sampling plus a rectangular
+%     apodisation) so the file runs out of the box. Comparing it with the
+%     reference (linear interpolation) shows the interpolation error as a
+%     raised sidelobe floor in the difference image and the lateral profile.
 %
 %   See also DAS_REFERENCE, SIM_ENGINE, MAIN_GUI.
 
 narginchk(7, 7);
 
 %% =====================================================================
-%  【STEP 0】入力の整形（通常は触らなくてよい）
+%  [STEP 0] Input handling (usually left untouched)
 %% =====================================================================
 if ndims(rf_data) > 2 %#ok<ISMAT>
     rf_data = rf_data(:,:,1);
 end
 [Nt, Nel] = size(rf_data);
 
-rxx = rx_pos(:).';                       % 受信素子 x 座標 [m]
-rxz = zeros(1, Nel);                     % 線形アレイなので z = 0
-assert(numel(rxx) == Nel, 'rx_pos の要素数が RF の列数と一致しません。');
+rxx = rx_pos(:).';                       % receive element x coordinates [m]
+rxz = zeros(1, Nel);                     % linear array, so z = 0
+assert(numel(rxx) == Nel, 'rx_pos does not match the number of RF columns.');
 
 if isvector(grid_x) && isvector(grid_z)
     [XI, ZI] = meshgrid(grid_x(:).', grid_z(:).');
@@ -50,33 +53,35 @@ imgSize = size(XI);
 xg = XI(:); zg = ZI(:); Npix = numel(xg);
 
 c  = sound_speed;
-t0 = tx_info.t0;                         % RF 第1サンプルの時刻 [s]
+t0 = tx_info.t0;                         % time of the first RF sample [s]
 
 %% =====================================================================
-%  【STEP 1】送信到達時間 tau_tx(p) を決める  <<< ここを書き換える
+%  [STEP 1] Transmit arrival time tau_tx(p)   <<< EDIT HERE
 %  ---------------------------------------------------------------------
-%  参照実装と同じ 2 通りのモデルを実装してある。
-%   (a) 初到達（Huygens）モデル ... 平面波・発散波・単一素子で厳密
+%  Two models are provided, mirroring the reference implementation.
+%   (a) First-arrival (Huygens) model - exact for plane, diverging and
+%       single-element transmits:
 %         tau_tx(p) = min_e ( delays(e) + |p - elem_e| / c )
-%   (b) 仮想音源モデル ......... 集束波用
-%         tau_tx(p) = T_F + s * |p - F| / c   (s = -1 焦点手前 / +1 以遠)
-%  (a) を集束波にも使うと焦点以遠で開口端の弱い端部波を拾い、深さ方向に
-%  1 mm 程度ずれる。この切り分けを外すとどうなるかを試すのも良い教材。
+%   (b) Virtual-source model - used for focused transmits:
+%         tau_tx(p) = T_F + s * |p - F| / c   (s = -1 before, +1 beyond focus)
+%  Using (a) for a focused transmit makes the beamformer latch onto the weak
+%  edge wave beyond the focus and shifts the image by roughly 1 mm in depth.
+%  Removing the distinction is an instructive experiment in itself.
 %% =====================================================================
 ex  = tx_info.elem_x;
 ez  = tx_info.elem_z;
 td  = tx_info.delays;
 ap  = tx_info.apod;
-act = isfinite(td) & ap(:).' ~= 0;       % 励振している素子だけを使う
+act = isfinite(td) & ap(:).' ~= 0;       % only the elements that actually fire
 exA = ex(act); ezA = ez(act); tdA = td(act);
 
-src = tx_info.src_xz;                    % 集束点 / 仮想音源 [x z] （無いと NaN）
+src = tx_info.src_xz;                    % focal point / virtual source [x z], NaN if none
 useVirtualSource = strcmpi(tx_info.scheme,'focused') && all(isfinite(src)) && ...
                    src(2) > 0 && ~tx_info.single_element;
 
 if useVirtualSource
     Rf   = hypot(exA - src(1), ezA - src(2));
-    Tf   = mean(tdA + Rf / c);           % 波面が焦点に収束する時刻 [s]
+    Tf   = mean(tdA + Rf / c);           % instant the wavefront converges on the focus [s]
     D    = hypot(src(1), src(2));
     u    = [src(1) src(2)] / D;
     proj = xg*u(1) + zg*u(2);
@@ -91,20 +96,21 @@ else
 end
 
 %% =====================================================================
-%  【STEP 2】受信開口の重み（f 値・アポダイゼーション）  <<< 書き換え可
+%  [STEP 2] Receive aperture weights (f-number, apodisation)  <<< EDITABLE
 %% =====================================================================
 fnum = tx_info.fnumber;
 if ~isfinite(fnum) || fnum <= 0
-    halfAp = inf(Npix, 1);               % 全開口
+    halfAp = inf(Npix, 1);               % full aperture
 else
-    halfAp = zg ./ (2*fnum);             % 深さに比例して開口を広げる
+    halfAp = zg ./ (2*fnum);             % aperture grows with depth
 end
 
 %% =====================================================================
-%  【STEP 3】遅延加算のメインループ  <<< ここを書き換える
+%  [STEP 3] Delay-and-sum main loop   <<< EDIT HERE
 %  ---------------------------------------------------------------------
-%  初期実装は「最近傍サンプリング」。round() を floor()+線形補間に
-%  変えると参照実装と一致するはずである（自作コードの検算に使える）。
+%  The initial version uses nearest-neighbour sampling. Replacing round()
+%  with floor() plus linear interpolation should reproduce the reference
+%  implementation exactly, which makes a handy self-check.
 %% =====================================================================
 bf = zeros(Npix, 1);
 if nargout > 1
@@ -113,11 +119,11 @@ end
 
 for e = 1:Nel
     dx  = xg - rxx(e);
-    tau = tau_tx + hypot(dx, zg - rxz(e)) / c;    % 往復合計時間 [s]
+    tau = tau_tx + hypot(dx, zg - rxz(e)) / c;    % total two-way time [s]
 
-    w   = double(abs(dx) <= halfAp);              % 矩形アポダイゼーション
+    w   = double(abs(dx) <= halfAp);              % rectangular apodisation
 
-    idx = round((tau - t0) * fs + 1);             % ★ 最近傍サンプリング
+    idx = round((tau - t0) * fs + 1);             % <-- nearest-neighbour sampling
     ok  = w > 0 & idx >= 1 & idx <= Nt;
     idxc = min(max(idx, 1), Nt);
 
@@ -133,7 +139,7 @@ for e = 1:Nel
 end
 
 %% =====================================================================
-%  【STEP 4】エンベロープ検波  <<< 書き換え可（例: ヒルベルト以外の手法）
+%  [STEP 4] Envelope detection   <<< EDITABLE (try something other than Hilbert)
 %% =====================================================================
 bf2 = reshape(bf, imgSize);
 if imgSize(1) >= 4
@@ -143,7 +149,7 @@ else
 end
 
 %% =====================================================================
-%  【STEP 5】後処理（TGC・スペックル低減など）を入れるならここ
+%  [STEP 5] Post-processing (TGC, speckle reduction, ...) goes here
 %% =====================================================================
 % bmode_img = ...;
 

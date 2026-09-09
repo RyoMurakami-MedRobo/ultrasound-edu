@@ -1,185 +1,219 @@
-# 超音波 DAS ビームフォーミング学習・検証ツール
+# Ultrasound DAS Beamforming Explorer
 
-MUST (Matlab UltraSound Toolbox) をバックエンドにした、Delay-And-Sum (DAS)
-ビームフォーミングの教育・検証用 GUI です。トランスデューサ構成・送信シーケンス・
-ターゲット配置を対話的に変えながら、**自作の DAS アルゴリズムを参照実装や MUST
-組み込み関数とベンチマーク比較**できます。
+An educational and verification GUI for Delay-And-Sum (DAS) beamforming, built
+on top of MUST (Matlab UltraSound Toolbox). Change the transducer, the transmit
+sequence and the target layout interactively, and **benchmark your own DAS
+algorithm against a reference implementation and against MUST's built-in
+function**.
 
-`.mlapp` は使わず、純粋な MATLAB コード（`uifigure` / `uigridlayout` / `uiaxes`）
-だけで構成しています。
+No `.mlapp` file is involved: the interface is plain MATLAB code
+(`uifigure` / `uigridlayout` / `uiaxes`).
 
 ---
 
-## 動作要件
+## Requirements
 
-| 項目 | 要否 | 備考 |
+| Item | Required | Notes |
 |---|---|---|
-| MATLAB | 必須 | R2021a 以降を推奨（R2025b で動作確認） |
-| Signal Processing Toolbox | 任意 | `hilbert` が無い場合は FFT で解析信号を計算します |
-| MUST | 任意 | **未インストールでも全機能が動きます**（解析的モックへ自動フォールバック） |
+| MATLAB | yes | R2021a or later recommended (verified on R2025b) |
+| Signal Processing Toolbox | optional | Falls back to an FFT-based analytic signal when `hilbert` is unavailable |
+| MUST | optional | **Everything works without it** — the engine falls back to an analytic mock backend |
 
-MUST は <https://www.biomecardio.com/MUST/> から入手できます。
+MUST is available from <https://www.biomecardio.com/MUST/>.
 
 ---
 
-## 起動
+## Getting started
 
 ```matlab
-cd <このフォルダ>
+cd <this folder>
 main_gui
 ```
 
-起動時に MUST の検出結果がステータスバーに表示されます。
-未検出なら `mock (MUST not found)`、検出済みなら `MUST` と表示されます。
+The status bar reports whether MUST was detected. Without it the backend reads
+`mock (MUST not found)`; with it, `MUST`.
 
 ---
 
-## ファイル構成
+## Files
 
-| ファイル | 役割 |
+| File | Role |
 |---|---|
-| `main_gui.m` | `uifigure` ベースのメイン UI 制御 |
-| `sim_engine.m` | MUST の `simus` をラップして RF データを生成（モックへフォールバック） |
-| `das_reference.m` | 教育用の標準 DAS 実装（遅延計算過程が追える参照コード） |
-| `das_custom_template.m` | ユーザーが独自アルゴリズムを書くためのひな形 |
-| `wave_animator.m` | 波面伝搬・遅延曲線・整相前後比較の可視化ロジック |
+| `main_gui.m` | `uifigure`-based user interface |
+| `sim_engine.m` | Wraps SIMUS from MUST to generate RF data, with an analytic fallback |
+| `das_reference.m` | Textbook DAS reference implementation |
+| `das_custom_template.m` | Skeleton for user-written algorithms |
+| `wave_animator.m` | Wave propagation, delay curve and alignment drawing |
 
 ---
 
-## 使い方
+## Using the tool
 
-1. **左パネルで条件を設定** — 素子数・ピッチ・中心周波数、送信モード
-   （平面波 / 集束波 / 発散波・単一素子）、ステアリング角、集束深度など。
-2. **ターゲットを配置** — プリセット（単一点 / ワイヤーファントム / 無エコー領域）
-   を適用するか、テーブルを直接編集します。ファントム表示エリアを
-   **左クリックで散乱体を追加**、**右クリックメニューで追加・削除**できます。
-3. **`[1] シミュレーション実行`** → RF データを生成。
-4. **`[2] ビームフォーミング / 比較`** → アルゴリズム A / B を並列実行して比較。
+1. **Set the acquisition** in the left column — elements, centre frequency,
+   transmit mode (plane / focused / diverging / single element), steering
+   angle, focal depth.
+2. **Place the targets** — apply a preset (single point / wire phantom /
+   anechoic cyst) or edit the table directly. In the phantom view you can
+   **left-click to add** a scatterer and **right-click for an add / delete
+   menu**.
+3. **Press `[1] Simulate`** to generate the RF data.
+4. **Press `[2] Beamform / Compare`** to run algorithms A and B side by side.
 
-### タブの内容
+### Simple and Detailed control modes
 
-- **ファントム & B モード** — ファントム配置と、A / B 2 画面の B モード像。
-  A の画像をクリックすると解析点（下記の遅延タブで使う再構成点）が動きます。
-- **比較・評価** — 差分画像 `|A - B|`、ラテラルプロファイルの重ね描きと
-  FWHM、指標テーブル（実行時間・ピーク位置・FWHM・MSE・最大絶対誤差）。
-- **波面アニメーション** — 送信波面（赤）と散乱エコー（青）の伝搬。
-  エコーが到達した受信素子がハイライトされます。
-- **遅延カーブ & 整相** — RF データ上に「どのサンプルが加算されるか」を示す
-  遅延曲線、整相前のばらついた波形束、整相後の同相波形束と積算結果。
+The **Control panel mode** selector at the top switches between:
+
+- **Simple** — elements, centre frequency, transmit mode, steering angle,
+  focal depth, the phantom table, receive f-number, dynamic range, algorithm
+  choice and the run buttons. Everything fits without scrolling.
+- **Detailed** — additionally exposes pitch, bandwidth, speed of sound,
+  sampling ratio, diverging-source depth, single-element transmit,
+  reconstruction grid size and extent, receive apodisation, the custom
+  function name and the backend override.
+
+Hidden panels keep their values, so Simple mode runs with whatever the
+advanced panels were last set to.
+
+### Tabs
+
+- **Phantom & B-mode** — the phantom layout plus the B-mode images of
+  algorithms A and B. Clicking image A moves the analysis point used by the
+  delay tab.
+- **Compare & metrics** — the difference image `|A - B|`, the overlaid lateral
+  profiles with their FWHM, and a metrics table (run time, peak position,
+  FWHM, MSE, maximum absolute error).
+- **Wave animation** — the transmit wavefront (red) and the scattered echoes
+  (blue). Receive elements light up as the echo reaches them. Playback is
+  paced against real time; at 1x one full sweep takes about 20 seconds, and
+  the speed selector offers 0.25x to 4x.
+- **Delay curve & alignment** — the delay curve showing which sample of each
+  element is summed, the misaligned waveform bundle, and the delay-corrected
+  bundle together with its coherent sum.
 
 ---
 
-## 自作 DAS アルゴリズムの検証
+## Verifying your own DAS algorithm
 
-### 統一インターフェース
+### Unified interface
 
 ```matlab
 [bmode_img, delays] = my_das(rf_data, tx_info, rx_pos, grid_x, grid_z, sound_speed, fs)
 ```
 
-| 引数 | 型 / サイズ | 意味 |
+| Argument | Type / size | Meaning |
 |---|---|---|
-| `rf_data` | `[Nt x Nel]` | RF データ。**時間が第 1 次元、列が受信素子** |
-| `tx_info` | struct | 送信条件（下表） |
-| `rx_pos` | `[1 x Nel]` | 受信素子の x 座標 [m]（受信ジオメトリはこれを正とする） |
-| `grid_x`, `grid_z` | ベクトル | 再構成グリッドの軸 [m]。内部で `meshgrid` される |
-| `sound_speed` | scalar | 音速 [m/s] |
-| `fs` | scalar | サンプリング周波数 [Hz] |
+| `rf_data` | `[Nt x Nel]` | RF data. **Time along the first dimension**, columns are receive elements |
+| `tx_info` | struct | Transmit settings (see below) |
+| `rx_pos` | `[1 x Nel]` | Receive element x coordinates [m]; authoritative for the receive geometry |
+| `grid_x`, `grid_z` | vectors | Reconstruction axes [m]; expanded internally with `meshgrid` |
+| `sound_speed` | scalar | Speed of sound [m/s] |
+| `fs` | scalar | Sampling frequency [Hz] |
 
-| 戻り値 | 型 / サイズ | 意味 |
+| Return value | Type / size | Meaning |
 |---|---|---|
-| `bmode_img` | `[numel(grid_z) x numel(grid_x)]` | **線形エンベロープ**（対数圧縮しない） |
-| `delays` | `[Npix x Nel]` | 各画素・各素子の**往復合計時間 [s]**。加算対象外は `NaN`。`nargout < 2` なら計算不要 |
+| `bmode_img` | `[numel(grid_z) x numel(grid_x)]` | **Linear envelope** (no log compression) |
+| `delays` | `[Npix x Nel]` | **Total two-way time [s]** per pixel and element; `NaN` where not summed. Skip it when `nargout < 2` |
 
-`tx_info` の主なフィールド:
+Main fields of `tx_info`:
 
-| フィールド | 意味 |
+| Field | Meaning |
 |---|---|
-| `delays` | `[1 x Nel]` 送信遅延 [s]（非励振素子は `NaN`、`min(有効)=0` に正規化） |
-| `apod` | `[1 x Nel]` 送信アポダイゼーション（`0` で非励振） |
-| `elem_x`, `elem_z` | 送信素子座標 [m] |
-| `t0` | RF 第 1 サンプルの時刻 [s] |
-| `fnumber` | 受信 f 値（`0` で全開口）。統一 I/F に引数枠が無いためここで渡します |
-| `rx_apod` | `'rect'` / `'hann'` |
-| `scheme`, `angle_deg`, `focus_mm`, `src_xz` | 送信条件（集束点 / 仮想音源の座標を含む） |
+| `delays` | `[1 x Nel]` transmit delays [s] (`NaN` on inactive elements, normalised so `min(active) = 0`) |
+| `apod` | `[1 x Nel]` transmit apodisation (`0` when inactive) |
+| `elem_x`, `elem_z` | Transmit element coordinates [m] |
+| `t0` | Time of the first RF sample [s] |
+| `fnumber` | Receive f-number (`0` = full aperture). The unified interface has no argument for it, so it travels here |
+| `rx_apod` | `'rect'` or `'hann'` |
+| `scheme`, `angle_deg`, `focus_mm`, `src_xz` | Transmit settings, including the focal point / virtual source coordinates |
 
-### 手順
+### Steps
 
-1. `das_custom_template.m` をコピーして `my_das.m` などにリネームし、
-   関数名をファイル名に合わせる。
-2. `【STEP 1】`〜`【STEP 5】` を書き換える。
-3. GUI の **自作関数名** 欄に `my_das` と入力し、アルゴリズム A / B の
-   どちらかで `自作DAS (Custom)` を選ぶ。
+1. Copy `das_custom_template.m` to e.g. `my_das.m` and rename the function to
+   match the file.
+2. Edit `[STEP 1]` ... `[STEP 5]`.
+3. Switch the control panel to **Detailed**, type `my_das` into
+   **Custom function name**, and select `Custom DAS` as algorithm A or B.
 
-戻り値のサイズが契約と違う場合は、`main_gui` が具体的なエラーメッセージを出します。
+If the returned size violates the contract, `main_gui` reports it with a
+specific error message.
 
-**ひな形の初期状態**は「最近傍サンプリング + 矩形アポダイゼーション」の素朴な
-DAS です。参照実装（線形補間）と比較すると、補間誤差がサイドローブとして
-現れる様子が差分画像とラテラルプロファイルで確認できます。
-
----
-
-## 評価指標の定義
-
-- **B モード画像は線形エンベロープ**で受け渡しし、表示時のみ `20*log10` します。
-  MSE や FWHM は線形値で評価するのが正しいためです。
-- **差分画像・MSE** は A の最大値で **共通正規化**してから計算します
-  （画像ごとに正規化するとゲイン差が隠れて比較にならないため）。
-- **FWHM** は線形エンベロープの **-6 dB（半値）全幅**を、交点の線形補間で
-  サブピクセル推定します。dB 画像上の「半分の値」ではありません。
-- **実行時間**は極小グリッドで 1 回捨て実行（JIT ウォームアップ）してから
-  計測します。また `delays` を要求しない 1 出力呼び出しを計測対象にしています。
-- FWHM が意味を持つのは点散乱体（PSF）プリセットのときだけです。
-  ワイヤーやシストでは最大値の行が選ばれるため参考値として扱ってください。
+**Out of the box** the template implements a naive DAS (nearest-neighbour
+sampling with a rectangular apodisation). Comparing it with the reference
+implementation (linear interpolation) shows the interpolation error as a
+raised sidelobe floor in the difference image and the lateral profile.
 
 ---
 
-## 送信モードについての注意（意図した挙動）
+## Definition of the metrics
 
-- **集束波は 1 本の走査線**です。ラテラル走査（スキャンライン掃引）は行わない
-  ため、ビーム軸から外れたターゲットは円弧状のアーチファクトになります。
-  これは実装のバグではなく、単一集束送信の物理的な帰結です。
-  軸外を正しく見るには平面波・発散波モードを使ってください。
-- **マルチフォーカス**（集束深度をカンマ区切りで複数指定）は、深度ごとに
-  別々の送信イベントを生成し、**深度ゾーンごとに画像を切り替えて合成**します。
-  ゾーンごとに独立してエンベロープ検波するため、ゾーン境界にわずかな継ぎ目
-  （ヒルベルト変換の端効果）が出ます。焦点を多く指定して 1 ゾーンが 4 画素
-  未満になると、その帯だけエンベロープ検波が `abs()` に縮退します。深さ画素数に
-  対して焦点は 3〜4 個程度までにしてください。
-- 送信到達時間のモデルは 2 通り使い分けています。
-  - 平面波 / 発散波 / 単一素子 → 初到達（Huygens）モデル `min_e(delay_e + |p-e|/c)`
-    （これらは閉形式と厳密に一致します）
-  - 集束波 → 仮想音源モデル `T_F ± |p-F|/c`
-    （初到達モデルは焦点以遠で開口端の弱い端部波を拾ってしまうため）
+- **B-mode images are passed around as linear envelopes**; `20*log10` is
+  applied only for display. MSE and FWHM are only meaningful on linear values.
+- **The difference image and the MSE normalise both images by the maximum of
+  A**. Normalising each image separately would hide gain differences.
+- **FWHM** is the **-6 dB (half-amplitude) full width of the linear envelope**,
+  with the crossings located by linear interpolation for sub-pixel accuracy.
+  It is not "half the value" on the dB image.
+- **Run time** is measured after a throwaway call on a tiny grid (JIT warm-up),
+  and the timed call requests a single output so computing `delays` does not
+  inflate the result.
+- FWHM is only meaningful for the single-point (PSF) preset. For wire and cyst
+  phantoms the row of the global maximum is used, so treat it as indicative.
 
 ---
 
-## バックエンドについて
+## Notes on the transmit modes (intended behaviour)
 
-### MUST バックエンド
+- **A focused transmit is a single scan line.** No lateral sweep is performed,
+  so targets off the beam axis appear as arc-shaped artefacts. This is the
+  physical consequence of a single focused firing, not an implementation bug.
+  Use the plane-wave or diverging modes to image off-axis targets correctly.
+- **Multi-focus** (several comma-separated focal depths) generates one transmit
+  event per depth and **composites the image zone by zone in depth**. Each zone
+  is envelope-detected independently, so a faint seam (Hilbert edge effect)
+  appears at the zone boundaries. If a zone ends up shorter than 4 rows, that
+  band degrades to `abs()` instead of a proper envelope, so keep the number of
+  focal depths to about three or four for the usual depth resolution.
+- Two models are used for the transmit arrival time:
+  - plane / diverging / single element -> first-arrival (Huygens) model
+    `min_e(delay_e + |p-e|/c)`, which is exactly equal to the closed forms;
+  - focused -> virtual-source model `T_F +/- |p-F|/c`, because the
+    first-arrival model latches onto the weak edge wave from the aperture rim
+    beyond the focus.
 
-MUST 依存コードは `sim_engine.m` の `runMUST` 関数の中だけに閉じ込めています。
-使用している公式構文は次のとおりです（MUST 公式ドキュメントで確認済み）。
+---
+
+## Backends
+
+### MUST backend
+
+All MUST-specific code lives inside the `runMUST` function of `sim_engine.m`.
+The syntax used is the following (checked against the official MUST
+documentation):
 
 ```
-RF = SIMUS(X, Z, RC, DELAYS, PARAM)   % 2-D 構文。RF の列数 = 素子数
-BFSIG = DAS(SIG, X, Z, DELAYS, PARAM) % MUST 組み込み DAS（比較用）
+RF = SIMUS(X, Z, RC, DELAYS, PARAM)   % 2-D syntax; RF has one column per element
+BFSIG = DAS(SIG, X, Z, DELAYS, PARAM) % MUST's built-in DAS, used for comparison
 ```
 
-- 時間原点は `t = 0`（`sim_engine` は `out.t0` として明示的に返します）。
-- 送信遅延則は MUST の `txdelay` を使わず本ツール内で計算しています
-  （遅延則そのものを教材として読めるようにするため）。
-- MUST のバージョン差で引数順が変わった場合は `runMUST` だけを修正すれば
-  済むようにしてあります。
+- The time origin is `t = 0`; `sim_engine` reports it explicitly as `out.t0`.
+- Transmit delays are computed inside this tool rather than with MUST's
+  `txdelay`, so the delay law itself can be read as teaching material.
+- If a future MUST release changes the argument order, only `runMUST` needs
+  editing.
 
-### モックバックエンド
+### Mock backend
 
-MUST が無い場合は、解析的な 2-D 円筒波モデルで RF を合成します。
+Without MUST, the RF data is synthesised with an analytic 2-D cylindrical-wave
+model:
 
-1. 全送信素子からの球面波を重ね合わせて散乱体位置の音場を作り、
-2. それを受信素子まで再伝搬させて RF に加算します。
+1. the spherical waves radiated by all active transmit elements are
+   superimposed to build the field at each scatterer, and
+2. that field is propagated back to every receive element and added to the RF
+   matrix.
 
-回折・素子指向性・周波数依存減衰は厳密にモデル化していませんが、**遅延構造は
-物理的に正しい**ため、DAS の整相を検証する目的には十分です。
-点散乱体を置いて再構成すると、平面波・集束波・発散波・単一素子のすべてで
-ピーク位置がグリッド 1 セル以内に一致することを確認しています。
+Diffraction, element directivity and frequency-dependent attenuation are not
+modelled rigorously, but **the delay structure is physically exact**, which is
+what matters when verifying the alignment performed by a DAS beamformer.
+Reconstructing a point scatterer places the peak within one grid cell of the
+truth for plane, focused, diverging and single-element transmits, across
+16 / 32 / 64 / 128 elements and sampling ratios of 4 and 8.
