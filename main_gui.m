@@ -36,7 +36,7 @@ app.msB      = NaN;
 app.gx       = [];
 app.gz       = [];
 app.pt       = [0 10e-3];
-app.cursorXZ = [0 20];  % last clicked phantom coordinate [mm]
+app.cursorXZ = [0 10];  % last clicked phantom coordinate [mm]
 app.playing  = false;
 app.animT    = 0;
 app.playToken = 0;
@@ -75,8 +75,8 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         % Row order must match ui.rowH and ui.rowLevel below. rowLevel is the
         % least detailed mode at which a row still appears, using the index of
         % ui.modes: 1 Extreme Simple, 2 Simple, 3 Detailed.
-        ui.rowH     = {30,  96, 120,  72, 152, 120, 284,  96, 194,  96,  96,  88};
-        ui.rowLevel = [ 1,   2,   3,   1,   2,   3,   1,   1,   3,   2,   3,   1];
+        ui.rowH     = {30,  96, 120,  72, 152, 120, 284,  96, 194,  96,  96, 104,  88};
+        ui.rowLevel = [ 1,   2,   3,   1,   2,   3,   1,   1,   3,   2,   3,   1,   1];
 
         ui.ctrl = uigridlayout(g, [numel(ui.rowH) 1]);
         ui.ctrl.Layout.Row = 1; ui.ctrl.Layout.Column = 1;
@@ -97,6 +97,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         buildReconAdvanced(ui.ctrl);
         buildAlgoBasic(ui.ctrl);
         buildAlgoAdvanced(ui.ctrl);
+        buildSetupPanel(ui.ctrl);
         buildRunPanel(ui.ctrl);
 
         % ---------- Right: tabs ----------
@@ -157,7 +158,11 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
                         'Value', '8', 'Editable', 'on', ...
                         'ValueChangedFcn', @(s,e) drawPhantom()), 1, 2);
         lab(gg, 'Centre frequency [MHz]', 2);
-        ui.fc    = put(uieditfield(gg, 'numeric', 'Value', 5, 'Limits', [0.5 30]), 2, 2);
+        % 0.5 MHz puts the wavelength (3.08 mm) just above the 3 mm pitch, so
+        % the sparse 8-element default images a point instead of a comb of
+        % grating lobes. See the Active setup readout.
+        ui.fc    = put(uieditfield(gg, 'numeric', 'Value', 0.5, 'Limits', [0.5 30], ...
+                        'ValueChangedFcn', @(s,e) refreshSetupInfo()), 2, 2);
     end
 
     function buildProbeAdvanced(parent)
@@ -170,9 +175,13 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
                         'Limits', [0.01 5], 'ValueDisplayFormat', '%.3f', ...
                         'ValueChangedFcn', @(s,e) drawPhantom()), 1, 2);
         lab(gg, 'Bandwidth -6 dB [%]', 2);
-        ui.bw    = put(uieditfield(gg, 'numeric', 'Value', 75, 'Limits', [5 200]), 2, 2);
+        ui.bw    = put(uieditfield(gg, 'numeric', 'Value', 75, 'Limits', [5 200], ...
+                        'ValueChangedFcn', @(s,e) refreshSetupInfo()), 2, 2);
         lab(gg, 'Sampling  fs / fc', 3);
-        ui.fsfac = put(uidropdown(gg, 'Items', {'4','6','8','12'}, 'Value', '4'), 3, 2);
+        % 12 rather than 4: the low centre frequency would otherwise sample the
+        % RF so coarsely that the delay-curve image turns blocky.
+        ui.fsfac = put(uidropdown(gg, 'Items', {'4','6','8','12'}, 'Value', '12', ...
+                        'ValueChangedFcn', @(s,e) refreshSetupInfo()), 3, 2);
     end
 
     %% ---------------- Medium ----------------
@@ -181,7 +190,8 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         % Extreme Simple, where the transducer panels are gone.
         gg = section(parent, 'Medium', {22});
         lab(gg, 'Speed of sound [m/s]', 1);
-        ui.c = put(uieditfield(gg, 'numeric', 'Value', 1540, 'Limits', [300 4000]), 1, 2);
+        ui.c = put(uieditfield(gg, 'numeric', 'Value', 1540, 'Limits', [300 4000], ...
+                        'ValueChangedFcn', @(s,e) refreshSetupInfo()), 1, 2);
     end
 
     %% ---------------- Transmit ----------------
@@ -259,11 +269,12 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         % Full aperture by default: at 8 elements an f-number of 1.5 would
         % leave only two channels active at the default target depth, which
         % is exactly what the delay and alignment panels are here to show.
-        ui.fnum = put(uieditfield(gg, 'numeric', 'Value', 0, 'Limits', [0 8]), 1, 2);
+        ui.fnum = put(uieditfield(gg, 'numeric', 'Value', 0, 'Limits', [0 8], ...
+                        'ValueChangedFcn', @(s,e) refreshSetupInfo()), 1, 2);
         ui.fnumRow = [lFnum, ui.fnum];
         lab(gg, 'Dynamic range [dB]', 2);
         ui.dr = put(uieditfield(gg, 'numeric', 'Value', 50, 'Limits', [10 120], ...
-            'ValueChangedFcn', @(s,e) refreshImages()), 2, 2);
+            'ValueChangedFcn', @(s,e) onDynamicRange()), 2, 2);
     end
 
     function buildReconAdvanced(parent)
@@ -278,12 +289,15 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         ui.xhalf = put(uieditfield(gg, 'numeric', 'Value', 12, 'Limits', [1 100], ...
             'ValueChangedFcn', @(s,e) drawPhantom()), 3, 2);
         lab(gg, 'Depth min [mm]', 4);
-        ui.zmin = put(uieditfield(gg, 'numeric', 'Value', 3, 'Limits', [0.1 300]), 4, 2);
+        ui.zmin = put(uieditfield(gg, 'numeric', 'Value', 3, 'Limits', [0.1 300], ...
+            'ValueChangedFcn', @(s,e) refreshSetupInfo()), 4, 2);
         lab(gg, 'Depth max [mm]', 5);
         ui.zmax = put(uieditfield(gg, 'numeric', 'Value', 20, 'Limits', [1 400], ...
             'ValueChangedFcn', @(s,e) drawPhantom()), 5, 2);
         lab(gg, 'Receive apodisation', 6);
-        ui.rxapod = put(uidropdown(gg, 'Items', {'rect', 'hann'}, 'Value', 'rect'), 6, 2);
+        ui.rxapod = put(uidropdown(gg, 'Items', {'rect', 'hann'}, 'Value', 'rect', ...
+            'ValueChangedFcn', @(s,e) refreshSetupInfo(), ...
+            'Tooltip', 'Has no effect while the receive f-number is 0.'), 6, 2);
     end
 
     %% ---------------- Algorithms ----------------
@@ -305,6 +319,59 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         lab(gg, 'Backend', 2);
         ui.forcemock = put(uicheckbox(gg, 'Text', 'Force the mock backend', ...
             'Value', false), 2, 2);
+    end
+
+    %% ---------------- Active setup readout ----------------
+    function buildSetupPanel(parent)
+        % Extreme Simple hides nearly every control, so the values actually in
+        % force have to stay legible somewhere on screen.
+        p = uipanel(parent, 'Title', 'Active setup', 'FontWeight', 'bold', ...
+                    'FontSize', 12);
+        ui.panels(end+1) = p;
+        gg = uigridlayout(p, [2 1]);
+        gg.RowHeight = {'1x', 15};
+        gg.Padding = [6 3 6 3]; gg.RowSpacing = 1;
+        ui.setupInfo = uilabel(gg, 'Text', '', 'FontSize', 11, ...
+                               'VerticalAlignment', 'top');
+        ui.setupWarn = uilabel(gg, 'Text', '', 'FontSize', 11, ...
+                               'FontWeight', 'bold', 'FontColor', [.75 .30 .05]);
+    end
+
+    function refreshSetupInfo()
+        %REFRESHSETUPINFO  Mirror the controls, including the hidden ones.
+        if ~isfield(ui, 'setupInfo') || ~isgraphics(ui.setupInfo), return; end
+        lamCh = char(955); degCh = char(176);
+        Nel   = max(round(str2double(ui.nel.Value)), 1);
+        pitch = ui.pitch.Value;                       % mm
+        fcMHz = ui.fc.Value;
+        lam   = ui.c.Value / (fcMHz*1e6) * 1e3;       % mm
+        fsf   = str2double(ui.fsfac.Value);
+        halfAp = (Nel-1)/2 * pitch;
+        if ui.fnum.Value > 0
+            rxTxt = sprintf('f/%.1f', ui.fnum.Value);
+        else
+            rxTxt = 'full aperture';
+        end
+        ui.setupInfo.Text = { ...
+            sprintf('%d elements   pitch %.2f mm   aperture %+.1f .. %+.1f mm', ...
+                    Nel, pitch, -halfAp, halfAp), ...
+            sprintf('fc %.2f MHz   %s %.2f mm   pitch = %.2f %s   BW %g%%', ...
+                    fcMHz, lamCh, lam, pitch/lam, lamCh, ui.bw.Value), ...
+            sprintf('c %g m/s   fs %.1f MHz (%g x fc)   rx %s, %s', ...
+                    ui.c.Value, fcMHz*fsf, fsf, rxTxt, ui.rxapod.Value), ...
+            sprintf('%s %+g%s   image %+g .. %+g mm, z %g .. %g mm   DR %g dB', ...
+                    ui.scheme.Value, ui.angle.Value, degCh, ...
+                    -ui.xhalf.Value, ui.xhalf.Value, ...
+                    ui.zmin.Value, ui.zmax.Value, ui.dr.Value)};
+        % Grating lobes appear once the element spacing exceeds a wavelength;
+        % say so here, because the B-mode alone looks like a broken image.
+        if pitch > lam
+            ui.setupWarn.Text = sprintf(...
+                'pitch > %s: grating lobes at %s%.0f%s from the axis', ...
+                lamCh, char(177), asind(min(lam/pitch, 1)), degCh);
+        else
+            ui.setupWarn.Text = '';
+        end
     end
 
     %% ---------------- Run ----------------
@@ -432,6 +499,12 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         rc = ui.reconRowH;
         if ext, rc{1} = 0; end
         ui.reconGrid.RowHeight = rc;
+        refreshSetupInfo();
+    end
+
+    function onDynamicRange()
+        refreshImages();
+        refreshSetupInfo();
     end
 
     function tf = extremeSimple()
@@ -445,6 +518,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         ui.elidx.Enable    = onoff(ui.singleel.Value);
         ui.angleSld.Enable = onoff(~ui.singleel.Value);
         ui.angle.Enable    = onoff(~ui.singleel.Value);
+        refreshSetupInfo();
     end
 
     function syncAngle(src)
@@ -453,6 +527,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         else
             ui.angleSld.Value = max(min(ui.angle.Value, 40), -40);
         end
+        refreshSetupInfo();
     end
 
     function onTableEdit()
@@ -868,6 +943,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %  Drawing
 %% ======================================================================
     function drawPhantom()
+        refreshSetupInfo();
         ax = ui.axPh;
         D  = ui.tbl.Data;
         cla(ax, 'reset');

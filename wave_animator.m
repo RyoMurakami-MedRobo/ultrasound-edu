@@ -305,10 +305,12 @@ end
 tc   = mean(tau(ok));
 % The window has to contain the delay curve, or the "before" panel crops the
 % very scatter it exists to show - a wide aperture at shallow depth spreads
-% the delays over far more than a few periods. Five periods of the centre
-% frequency stays the floor, so narrow-aperture cases look as they did.
+% the delays over far more than a few periods. The floor is three periods of
+% the centre frequency - roughly two pulse lengths at the bandwidths this
+% tool uses - so a wavelet stays readable without dwarfing the curve when the
+% centre frequency is low.
 spread  = max(tau(ok)) - min(tau(ok));
-halfWin = max(5/fc, 0.65*spread + 1/fc);
+halfWin = max(3/fc, 0.65*spread + 1/fc);
 trel = linspace(-halfWin, halfWin, 401);
 
 pre  = zeros(numel(trel), Nel);
