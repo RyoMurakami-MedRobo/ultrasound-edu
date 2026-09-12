@@ -158,29 +158,28 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
                         'Value', '8', 'Editable', 'on', ...
                         'ValueChangedFcn', @(s,e) drawPhantom()), 1, 2);
         lab(gg, 'Centre frequency [MHz]', 2);
-        % 0.5 MHz puts the wavelength (3.08 mm) just above the 3 mm pitch, so
-        % the sparse 8-element default images a point instead of a comb of
-        % grating lobes. See the Active setup readout.
-        ui.fc    = put(uieditfield(gg, 'numeric', 'Value', 0.5, 'Limits', [0.5 30], ...
+        ui.fc    = put(uieditfield(gg, 'numeric', 'Value', 5, 'Limits', [0.5 30], ...
                         'ValueChangedFcn', @(s,e) refreshSetupInfo()), 2, 2);
     end
 
     function buildProbeAdvanced(parent)
         gg = section(parent, 'Transducer (advanced)', repmat({22}, 1, 3));
         lab(gg, 'Pitch [mm]', 1);
-        % 8 elements at 3 mm span -10.5 .. 10.5 mm, so the default aperture
-        % covers the image laterally with channels few enough to follow one
-        % by one in the delay and alignment panels.
-        ui.pitch = put(uieditfield(gg, 'numeric', 'Value', 3.00, ...
+        % The pitch, not the centre frequency, is what keeps the sparse
+        % 8-element default out of the grating lobes. At 5 MHz (lambda =
+        % 0.31 mm) 0.6 mm is 1.95 lambda, which throws the replicas to +/-31
+        % deg - 6 mm off axis at the target depth, outside the 4 mm image -
+        % and measures -16 dB worst off-target against -8 dB at 3 mm.
+        % Larger would widen the aperture and curve the delay more, but the
+        % replicas march back into the frame; see the Active setup readout.
+        ui.pitch = put(uieditfield(gg, 'numeric', 'Value', 0.60, ...
                         'Limits', [0.01 5], 'ValueDisplayFormat', '%.3f', ...
                         'ValueChangedFcn', @(s,e) drawPhantom()), 1, 2);
         lab(gg, 'Bandwidth -6 dB [%]', 2);
         ui.bw    = put(uieditfield(gg, 'numeric', 'Value', 75, 'Limits', [5 200], ...
                         'ValueChangedFcn', @(s,e) refreshSetupInfo()), 2, 2);
         lab(gg, 'Sampling  fs / fc', 3);
-        % 12 rather than 4: the low centre frequency would otherwise sample the
-        % RF so coarsely that the delay-curve image turns blocky.
-        ui.fsfac = put(uidropdown(gg, 'Items', {'4','6','8','12'}, 'Value', '12', ...
+        ui.fsfac = put(uidropdown(gg, 'Items', {'4','6','8','12'}, 'Value', '4', ...
                         'ValueChangedFcn', @(s,e) refreshSetupInfo()), 3, 2);
     end
 
@@ -286,7 +285,10 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         ui.nz = put(uieditfield(gg, 'numeric', 'Value', 221, 'Limits', [8 1201], ...
                     'RoundFractionalValues', 'on'), 2, 2);
         lab(gg, 'Lateral half-width [mm]', 3);
-        ui.xhalf = put(uieditfield(gg, 'numeric', 'Value', 12, 'Limits', [1 100], ...
+        % Matched to the 4.2 mm aperture: a point about 1 mm wide reads as a
+        % point in a 8 mm frame, and the grating replicas at +/-6 mm stay out
+        % of it. Widening this brings them back into view.
+        ui.xhalf = put(uieditfield(gg, 'numeric', 'Value', 4, 'Limits', [1 100], ...
             'ValueChangedFcn', @(s,e) drawPhantom()), 3, 2);
         lab(gg, 'Depth min [mm]', 4);
         ui.zmin = put(uieditfield(gg, 'numeric', 'Value', 3, 'Limits', [0.1 300], ...
