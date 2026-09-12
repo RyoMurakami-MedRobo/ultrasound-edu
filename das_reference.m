@@ -1,4 +1,6 @@
-function [bmode_img, delays] = das_reference(rf_data, tx_info, rx_pos, grid_x, grid_z, sound_speed, fs)
+function [bmode_img, delays, trace] = das_reference(rf_data, tx_info, rx_pos, grid_x, grid_z, sound_speed, fs)
+% Optional third output trace records actual channel increments and coherent RF.
+% See docs/HW3_DAS.md; retain the accumulation hook in custom implementations.
 %DAS_REFERENCE  Textbook Delay-And-Sum beamformer (reference implementation).
 %
 %   [bmode_img, delays] = DAS_REFERENCE(rf_data, tx_info, rx_pos, ...
@@ -83,6 +85,12 @@ tau_tx = txArrivalTime(XI, ZI, tx_info, c);
 
 %% ---- Preparation ----------------------------------------------------
 bf = zeros(Npix, 1);
+% Optional execution trace: record the exact increment at the summation site.
+% Keep this hook when editing DAS. Request only a scan line to bound memory.
+trace = [];
+if nargout > 2
+    trace.contributions = zeros(Npix, Nel);
+end
 if nargout > 1
     delays = nan(Npix, Nel);
 end
@@ -122,7 +130,11 @@ for e = 1:Nel
     val  = rf_data(i0c, e) .* (1-frac) + rf_data(i0c+1, e) .* frac;
     val(~ok) = 0;
 
+    if nargout > 2, previous = bf; end
     bf = bf + w .* val;
+    if nargout > 2
+        trace.contributions(:, e) = bf - previous;
+    end
 
     if nargout > 1
         d = tau;
@@ -133,6 +145,7 @@ end
 
 %% ---- 5) Envelope detection ------------------------------------------
 bmode_img = envelopeZ(reshape(bf, imgSize));
+if nargout > 2, trace.coherent = reshape(bf, imgSize); end
 end % das_reference
 
 %% ======================================================================

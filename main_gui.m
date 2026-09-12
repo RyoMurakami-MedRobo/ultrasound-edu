@@ -35,10 +35,13 @@ app.msA      = NaN;
 app.msB      = NaN;
 app.gx       = [];
 app.gz       = [];
-app.pt       = [0 20e-3];
+app.pt       = [0 10e-3];
 app.cursorXZ = [0 20];  % last clicked phantom coordinate [mm]
 app.playing  = false;
 app.animT    = 0;
+app.playToken = 0;
+app.dasToken = 0;
+app.delayDragging = false;
 
 % Wall-clock duration of one full animation sweep at 1x speed [s].
 % The playback loop is paced against real time rather than frame count,
@@ -69,9 +72,11 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         g.Padding = [6 6 6 6]; g.RowSpacing = 4; g.ColumnSpacing = 6;
 
         % ---------- Left: controls ----------
-        % Row order must match ui.rowH and ui.advRows below.
-        ui.rowH    = {30, 96, 144, 152, 120, 284, 96, 194, 96, 96, 88};
-        ui.advRows = [3 5 8 10];          % rows collapsed in Simple mode
+        % Row order must match ui.rowH and ui.rowLevel below. rowLevel is the
+        % least detailed mode at which a row still appears, using the index of
+        % ui.modes: 1 Extreme Simple, 2 Simple, 3 Detailed.
+        ui.rowH     = {30,  96, 120,  72, 152, 120, 284,  96, 194,  96,  96,  88};
+        ui.rowLevel = [ 1,   2,   3,   1,   2,   3,   1,   1,   3,   2,   3,   1];
 
         ui.ctrl = uigridlayout(g, [numel(ui.rowH) 1]);
         ui.ctrl.Layout.Row = 1; ui.ctrl.Layout.Column = 1;
@@ -79,10 +84,12 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         ui.ctrl.Scrollable = 'on';
         ui.ctrl.Padding = [2 2 2 2]; ui.ctrl.RowSpacing = 4;
 
+        % Each builder registers its container, so ui.panels runs in row order.
+        ui.panels = gobjects(0);
         buildModeHeader(ui.ctrl);
-        ui.advPanels = gobjects(0);
         buildProbeBasic(ui.ctrl);
         buildProbeAdvanced(ui.ctrl);
+        buildMediumPanel(ui.ctrl);
         buildTxBasic(ui.ctrl);
         buildTxAdvanced(ui.ctrl);
         buildPhantomPanel(ui.ctrl);
@@ -99,6 +106,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         buildTabCompare();
         buildTabAnim();
         buildTabDelay();
+        buildTabDAS();
 
         % ---------- Status bar ----------
         ui.status = uilabel(g, 'Text', '', 'FontSize', 12, ...
@@ -108,13 +116,14 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 
     function [gg, p] = section(parent, ttl, heights)
         p = uipanel(parent, 'Title', ttl, 'FontWeight', 'bold', 'FontSize', 12);
+        ui.panels(end+1) = p;
         gg = uigridlayout(p, [numel(heights) 2]);
         gg.ColumnWidth = {172, '1x'};
         gg.RowHeight   = heights;
         gg.Padding = [6 4 6 4]; gg.RowSpacing = 3; gg.ColumnSpacing = 6;
     end
 
-    function lab(parent, txt, r)
+    function lb = lab(parent, txt, r)
         lb = uilabel(parent, 'Text', txt, 'HorizontalAlignment', 'right');
         lb.Layout.Row = r; lb.Layout.Column = 1;
     end
@@ -123,46 +132,56 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         h.Layout.Row = r; h.Layout.Column = c;
     end
 
-    function markAdvanced(p)
-        ui.advPanels(end+1) = p;
-    end
-
     %% ---------------- Mode header ----------------
     function buildModeHeader(parent)
         gg = uigridlayout(parent, [1 2]);
+        ui.panels(end+1) = gg;
         gg.ColumnWidth = {172, '1x'};
         gg.Padding = [6 2 6 2]; gg.ColumnSpacing = 6;
         uilabel(gg, 'Text', 'Control panel mode', 'HorizontalAlignment', 'right', ...
                 'FontWeight', 'bold');
-        ui.mode = uidropdown(gg, 'Items', {'Simple', 'Detailed'}, 'Value', 'Simple', ...
+        % Order matters: applyMode uses the index as the detail level.
+        ui.modes = {'Extreme Simple', 'Simple', 'Detailed'};
+        ui.mode = uidropdown(gg, 'Items', ui.modes, 'Value', ui.modes{1}, ...
             'ValueChangedFcn', @(s,e) applyMode(), ...
-            'Tooltip', 'Simple hides the advanced panels; their values stay in effect.');
+            'Tooltip', ['Extreme Simple leaves only the target position, the ' ...
+                        'speed of sound and the dynamic range. Hidden values ' ...
+                        'stay in effect.']);
     end
 
     %% ---------------- Transducer ----------------
     function buildProbeBasic(parent)
         gg = section(parent, 'Transducer', repmat({22}, 1, 2));
         lab(gg, 'Elements', 1);
-        ui.nel   = put(uidropdown(gg, 'Items', {'16','32','64','128','192'}, ...
-                        'Value', '64', 'Editable', 'on', ...
+        ui.nel   = put(uidropdown(gg, 'Items', {'8','16','32','64','128','192','256','512'}, ...
+                        'Value', '8', 'Editable', 'on', ...
                         'ValueChangedFcn', @(s,e) drawPhantom()), 1, 2);
         lab(gg, 'Centre frequency [MHz]', 2);
         ui.fc    = put(uieditfield(gg, 'numeric', 'Value', 5, 'Limits', [0.5 30]), 2, 2);
     end
 
     function buildProbeAdvanced(parent)
-        [gg, p] = section(parent, 'Transducer (advanced)', repmat({22}, 1, 4));
-        markAdvanced(p);
+        gg = section(parent, 'Transducer (advanced)', repmat({22}, 1, 3));
         lab(gg, 'Pitch [mm]', 1);
-        ui.pitch = put(uieditfield(gg, 'numeric', 'Value', 0.30, ...
+        % 8 elements at 3 mm span -10.5 .. 10.5 mm, so the default aperture
+        % covers the image laterally with channels few enough to follow one
+        % by one in the delay and alignment panels.
+        ui.pitch = put(uieditfield(gg, 'numeric', 'Value', 3.00, ...
                         'Limits', [0.01 5], 'ValueDisplayFormat', '%.3f', ...
                         'ValueChangedFcn', @(s,e) drawPhantom()), 1, 2);
         lab(gg, 'Bandwidth -6 dB [%]', 2);
         ui.bw    = put(uieditfield(gg, 'numeric', 'Value', 75, 'Limits', [5 200]), 2, 2);
-        lab(gg, 'Speed of sound [m/s]', 3);
-        ui.c     = put(uieditfield(gg, 'numeric', 'Value', 1540, 'Limits', [300 4000]), 3, 2);
-        lab(gg, 'Sampling  fs / fc', 4);
-        ui.fsfac = put(uidropdown(gg, 'Items', {'4','6','8','12'}, 'Value', '4'), 4, 2);
+        lab(gg, 'Sampling  fs / fc', 3);
+        ui.fsfac = put(uidropdown(gg, 'Items', {'4','6','8','12'}, 'Value', '4'), 3, 2);
+    end
+
+    %% ---------------- Medium ----------------
+    function buildMediumPanel(parent)
+        % Its own section because the speed of sound stays adjustable in
+        % Extreme Simple, where the transducer panels are gone.
+        gg = section(parent, 'Medium', {22});
+        lab(gg, 'Speed of sound [m/s]', 1);
+        ui.c = put(uieditfield(gg, 'numeric', 'Value', 1540, 'Limits', [300 4000]), 1, 2);
     end
 
     %% ---------------- Transmit ----------------
@@ -182,14 +201,13 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
             'ValueChangedFcn', @(s,e) syncAngle('edit')), 3, 2);
 
         lab(gg, 'Focal depth F [mm]', 4);
-        ui.focus = put(uieditfield(gg, 'text', 'Value', '20', ...
+        ui.focus = put(uieditfield(gg, 'text', 'Value', '10', ...
             'Tooltip', ['Comma-separated values request a multi-focus ' ...
                         'sequence (composited by depth zone).']), 4, 2);
     end
 
     function buildTxAdvanced(parent)
-        [gg, p] = section(parent, 'Transmit (advanced)', repmat({22}, 1, 3));
-        markAdvanced(p);
+        gg = section(parent, 'Transmit (advanced)', repmat({22}, 1, 3));
         lab(gg, 'Diverging source [mm]', 1);
         ui.srcdepth = put(uieditfield(gg, 'numeric', 'Value', 10, 'Limits', [0.5 100], ...
             'Tooltip', 'Places a virtual source behind the array at z = -value'), 1, 2);
@@ -197,50 +215,59 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         ui.singleel = put(uicheckbox(gg, 'Text', 'Fire one element only', 'Value', false, ...
             'ValueChangedFcn', @(s,e) onSchemeChanged()), 2, 2);
         lab(gg, 'Element index', 3);
-        ui.elidx = put(uieditfield(gg, 'numeric', 'Value', 32, 'Limits', [1 1024], ...
+        ui.elidx = put(uieditfield(gg, 'numeric', 'Value', 4, 'Limits', [1 1024], ...
             'RoundFractionalValues', 'on'), 3, 2);
     end
 
     %% ---------------- Phantom ----------------
     function buildPhantomPanel(parent)
         gg = section(parent, 'Targets (phantom)', {22, 26, 130, 26, 26});
-        lab(gg, 'Preset', 1);
+        ui.phantomGrid = gg; ui.phantomRowH = gg.RowHeight;
+        lPreset = lab(gg, 'Preset', 1);
         ui.preset = put(uidropdown(gg, 'Items', ...
             {'Single point (PSF)', 'Wire phantom', 'Anechoic cyst', 'Custom'}, ...
             'Value', 'Single point (PSF)'), 1, 2);
 
-        put(uibutton(gg, 'Text', 'Apply preset', ...
+        bApply = put(uibutton(gg, 'Text', 'Apply preset', ...
             'ButtonPushedFcn', @(s,e) applyPresetAndRefresh()), 2, 1);
         ui.clickAdd = put(uicheckbox(gg, 'Text', 'Left-click to add', 'Value', true), 2, 2);
 
         ui.tbl = uitable(gg, 'ColumnName', {'X [mm]', 'Z [mm]', 'Amplitude'}, ...
             'ColumnEditable', [true true true], 'ColumnWidth', {80, 80, 90}, ...
-            'Data', [0 20 1], 'CellEditCallback', @(s,e) onTableEdit());
+            'Data', [0 10 1], 'CellEditCallback', @(s,e) onTableEdit());
         ui.tbl.Layout.Row = 3; ui.tbl.Layout.Column = [1 2];
 
-        put(uibutton(gg, 'Text', 'Add row', ...
+        bAdd = put(uibutton(gg, 'Text', 'Add row', ...
             'ButtonPushedFcn', @(s,e) addRow()), 4, 1);
-        put(uibutton(gg, 'Text', 'Delete selected', ...
+        bDel = put(uibutton(gg, 'Text', 'Delete selected', ...
             'ButtonPushedFcn', @(s,e) delSelectedRows()), 4, 2);
-        put(uibutton(gg, 'Text', 'Clear all', ...
+        bClr = put(uibutton(gg, 'Text', 'Clear all', ...
             'ButtonPushedFcn', @(s,e) clearRows()), 5, 1);
-        put(uilabel(gg, 'Text', 'Right-click: add / delete', 'FontSize', 11, ...
+        lHint = put(uilabel(gg, 'Text', 'Right-click: add / delete', 'FontSize', 11, ...
             'FontColor', [.4 .4 .4]), 5, 2);
+        % Everything except the table itself: Extreme Simple edits the target
+        % position and nothing else about the phantom.
+        ui.phantomExtras = [lPreset, ui.preset, bApply, ui.clickAdd, ...
+                            bAdd, bDel, bClr, lHint];
     end
 
     %% ---------------- Reconstruction ----------------
     function buildReconBasic(parent)
         gg = section(parent, 'Reconstruction', repmat({22}, 1, 2));
-        lab(gg, 'Receive f-number (0 = full)', 1);
-        ui.fnum = put(uieditfield(gg, 'numeric', 'Value', 1.5, 'Limits', [0 8]), 1, 2);
+        ui.reconGrid = gg; ui.reconRowH = gg.RowHeight;
+        lFnum = lab(gg, 'Receive f-number (0 = full)', 1);
+        % Full aperture by default: at 8 elements an f-number of 1.5 would
+        % leave only two channels active at the default target depth, which
+        % is exactly what the delay and alignment panels are here to show.
+        ui.fnum = put(uieditfield(gg, 'numeric', 'Value', 0, 'Limits', [0 8]), 1, 2);
+        ui.fnumRow = [lFnum, ui.fnum];
         lab(gg, 'Dynamic range [dB]', 2);
         ui.dr = put(uieditfield(gg, 'numeric', 'Value', 50, 'Limits', [10 120], ...
             'ValueChangedFcn', @(s,e) refreshImages()), 2, 2);
     end
 
     function buildReconAdvanced(parent)
-        [gg, p] = section(parent, 'Reconstruction grid (advanced)', repmat({22}, 1, 6));
-        markAdvanced(p);
+        gg = section(parent, 'Reconstruction grid (advanced)', repmat({22}, 1, 6));
         lab(gg, 'Pixels X', 1);
         ui.nx = put(uieditfield(gg, 'numeric', 'Value', 161, 'Limits', [8 1201], ...
                     'RoundFractionalValues', 'on'), 1, 2);
@@ -253,7 +280,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         lab(gg, 'Depth min [mm]', 4);
         ui.zmin = put(uieditfield(gg, 'numeric', 'Value', 3, 'Limits', [0.1 300]), 4, 2);
         lab(gg, 'Depth max [mm]', 5);
-        ui.zmax = put(uieditfield(gg, 'numeric', 'Value', 40, 'Limits', [1 400], ...
+        ui.zmax = put(uieditfield(gg, 'numeric', 'Value', 20, 'Limits', [1 400], ...
             'ValueChangedFcn', @(s,e) drawPhantom()), 5, 2);
         lab(gg, 'Receive apodisation', 6);
         ui.rxapod = put(uidropdown(gg, 'Items', {'rect', 'hann'}, 'Value', 'rect'), 6, 2);
@@ -271,8 +298,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
     end
 
     function buildAlgoAdvanced(parent)
-        [gg, p] = section(parent, 'Algorithm (advanced)', repmat({22}, 1, 2));
-        markAdvanced(p);
+        gg = section(parent, 'Algorithm (advanced)', repmat({22}, 1, 2));
         lab(gg, 'Custom function name', 1);
         ui.customfn = put(uieditfield(gg, 'text', 'Value', 'das_custom_template', ...
             'Tooltip', 'Name of your copy of das_custom_template'), 1, 2);
@@ -284,6 +310,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
     %% ---------------- Run ----------------
     function buildRunPanel(parent)
         p  = uipanel(parent, 'Title', 'Run', 'FontWeight', 'bold', 'FontSize', 12);
+        ui.panels(end+1) = p;
         gg = uigridlayout(p, [2 1]);
         gg.RowHeight = {28, 28}; gg.Padding = [6 4 6 4]; gg.RowSpacing = 4;
         ui.btnSim = uibutton(gg, 'Text', '[1] Simulate (generate RF)', ...
@@ -329,6 +356,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
     %% ---------------- Tab 3: wave animation ----------------
     function buildTabAnim()
         t  = uitab(ui.tabs, 'Title', 'Wave animation');
+        ui.tabAnim = t;
         gg = uigridlayout(t, [2 1]);
         gg.RowHeight = {'1x', 40}; gg.Padding = [8 8 8 8];
         ui.axAnim = uiaxes(gg);
@@ -353,22 +381,24 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         t  = uitab(ui.tabs, 'Title', 'Delay curve & alignment');
         gg = uigridlayout(t, [2 1]);
         gg.RowHeight = {'1x', 36}; gg.Padding = [8 8 8 8];
-        ag = uigridlayout(gg, [1 3]);
-        ag.ColumnWidth = {'1x','1x','1x'}; ag.Padding = [0 0 0 0];
+        ag = uigridlayout(gg, [1 4]);
+        ag.ColumnWidth = {'1x','1x','1x','1x'}; ag.Padding = [0 0 0 0];
+        ui.axDelayBmode = uiaxes(ag);
         ui.axRF   = uiaxes(ag);
         ui.axPre  = uiaxes(ag);
         ui.axPost = uiaxes(ag);
+        title(ui.axDelayBmode, 'B-mode A: click / drag a pixel');
         title(ui.axRF, 'RF data + delay curve');
 
         cg = uigridlayout(gg, [1 6]);
         cg.ColumnWidth = {260, 60, 80, 60, 80, '1x'};
         cg.Padding = [0 0 0 0]; cg.ColumnSpacing = 6;
-        uilabel(cg, 'Text', 'Reconstruction point (or click the B-mode image):');
+        uilabel(cg, 'Text', 'Reconstruction pixel (click / drag B-mode at left):');
         uilabel(cg, 'Text', 'X [mm]', 'HorizontalAlignment', 'right');
         ui.ptx = uieditfield(cg, 'numeric', 'Value', 0, ...
             'ValueChangedFcn', @(s,e) onPointEdited());
         uilabel(cg, 'Text', 'Z [mm]', 'HorizontalAlignment', 'right');
-        ui.ptz = uieditfield(cg, 'numeric', 'Value', 20, ...
+        ui.ptz = uieditfield(cg, 'numeric', 'Value', 10, ...
             'ValueChangedFcn', @(s,e) onPointEdited());
         ui.lblDelayInfo = uilabel(cg, 'Text', '', 'FontColor', [.3 .3 .3]);
     end
@@ -377,15 +407,35 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %  UI events
 %% ======================================================================
     function applyMode()
-        simple = strcmp(ui.mode.Value, 'Simple');
+        %APPLYMODE  Show the panels this control-panel mode is entitled to.
+        %  Hidden controls keep their values, so a mode change never alters
+        %  the simulation - it only changes what can be reached.
+        lvl = find(strcmp(ui.mode.Value, ui.modes), 1);
         h = ui.rowH;
-        if simple
-            for r = ui.advRows, h{r} = 0; end
+        for r = 1:numel(h)
+            show = ui.rowLevel(r) <= lvl;
+            if ~show, h{r} = 0; end
+            ui.panels(r).Visible = onoff(show);
         end
         ui.ctrl.RowHeight = h;
-        for k = 1:numel(ui.advPanels)
-            ui.advPanels(k).Visible = onoff(~simple);
-        end
+
+        % Extreme Simple leaves the target position, the speed of sound and
+        % the dynamic range. The first and last live in panels that carry
+        % more than that, so those two are trimmed rather than hidden.
+        ext = lvl == 1;
+        for w = ui.phantomExtras, w.Visible = onoff(~ext); end
+        ph = ui.phantomRowH;
+        if ext, [ph{[1 2 4 5]}] = deal(0); end
+        ui.phantomGrid.RowHeight = ph;
+
+        for w = ui.fnumRow, w.Visible = onoff(~ext); end
+        rc = ui.reconRowH;
+        if ext, rc{1} = 0; end
+        ui.reconGrid.RowHeight = rc;
+    end
+
+    function tf = extremeSimple()
+        tf = strcmp(ui.mode.Value, ui.modes{1});
     end
 
     function onSchemeChanged()
@@ -411,7 +461,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
     end
 
     function addRow()
-        ui.tbl.Data = [ui.tbl.Data; 0, 20, 1];
+        ui.tbl.Data = [ui.tbl.Data; 0, 10, 1];
         ui.preset.Value = 'Custom';
         drawPhantom();
     end
@@ -443,7 +493,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
     function applyPreset()
         switch ui.preset.Value
             case 'Single point (PSF)'
-                D = [0 20 1];
+                D = [0 10 1];
             case 'Wire phantom'
                 [XW, ZW] = meshgrid(-8:4:8, 8:6:38);
                 D = [XW(:), ZW(:), ones(numel(XW), 1)];
@@ -486,7 +536,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         if strcmp(ui.fig.SelectionType, 'alt')
             % Rarely reached: an assigned ContextMenu consumes the right-click.
             delScatAt(app.cursorXZ);
-        elseif ui.clickAdd.Value
+        elseif ui.clickAdd.Value && ~extremeSimple()
             addScatAt(app.cursorXZ);
         end
     end
@@ -519,6 +569,37 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         app.pt = [cp(1,1)*1e-3, cp(1,2)*1e-3];
         ui.ptx.Value = cp(1,1);
         ui.ptz.Value = cp(1,2);
+        refreshImages();
+        updateDelayViews();
+    end
+
+    function onDelayPointPress(ax, ~)
+        app.delayDragging = true;
+        setDelayPointFromAxes(ax);
+        ui.fig.WindowButtonMotionFcn = @(s,e) onDelayPointDrag();
+        ui.fig.WindowButtonUpFcn = @(s,e) onDelayPointRelease();
+    end
+
+    function onDelayPointDrag()
+        if app.delayDragging && isvalid(ui.axDelayBmode)
+            setDelayPointFromAxes(ui.axDelayBmode);
+        end
+    end
+
+    function onDelayPointRelease()
+        app.delayDragging = false;
+        ui.fig.WindowButtonMotionFcn = '';
+        ui.fig.WindowButtonUpFcn = '';
+    end
+
+    function setDelayPointFromAxes(ax)
+        if isempty(app.gx) || isempty(app.gz), return; end
+        cp = ax.CurrentPoint;
+        x = min(max(cp(1,1), app.gx(1)*1e3), app.gx(end)*1e3);
+        z = min(max(cp(1,2), app.gz(1)*1e3), app.gz(end)*1e3);
+        app.pt = [x z]*1e-3;
+        ui.ptx.Value = x;
+        ui.ptz.Value = z;
         refreshImages();
         updateDelayViews();
     end
@@ -562,11 +643,15 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         cfg.acq    = struct('fs_factor', str2double(ui.fsfac.Value));
 
         fmm = parseList(ui.focus.Value);
-        if isempty(fmm), fmm = 20; end
+        if isempty(fmm), fmm = 10; end
+        % The field allows indices up to 1024 but the array may be far
+        % smaller - 8 elements is now the default - and sim_engine would
+        % index past its end.
+        elIdx = min(max(round(ui.elidx.Value), 1), Nel);
         cfg.tx = struct('scheme', schemeKey(), 'angle_deg', ui.angle.Value, ...
                         'focus_mm', fmm, 'src_mm', ui.srcdepth.Value, ...
                         'single_element', ui.singleel.Value, ...
-                        'element_index', ui.elidx.Value);
+                        'element_index', elIdx);
 
         D = ui.tbl.Data;
         if isempty(D), D = zeros(0,3); end
@@ -587,7 +672,9 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %% ======================================================================
 %  Run: simulation
 %% ======================================================================
-    function onSimulate()
+    function onSimulate(autoPlay)
+        if nargin < 1, autoPlay = true; end
+        stopPlayback();
         cfg = readCfg();
         setStatus('Simulating...'); drawnow;
         try
@@ -605,6 +692,8 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         setStatus(sprintf(['RF generated | backend = %s | %d transmit event(s) | ' ...
             'RF %d x %d | fs = %.1f MHz | %.2f s'], app.S.backend, numel(app.S.tx), ...
             size(app.S.RF,1), size(app.S.RF,2), app.S.fs/1e6, app.S.elapsed));
+        ui.tabs.SelectedTab = ui.tabAnim;
+        if autoPlay, onPlayToggle(); end
     end
 
     function updateTxEventList()
@@ -626,8 +715,9 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %  Run: beamforming and comparison
 %% ======================================================================
     function onBeamform()
+        stopPlayback();
         if isempty(app.S)
-            onSimulate();
+            onSimulate(false);
             if isempty(app.S), return; end
         end
         [gx, gz] = reconGrid();
@@ -666,6 +756,8 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
             msg = sprintf('%s   |   B: %s = %.1f ms', msg, app.nameB, app.msB);
         end
         setStatus(['Beamforming done.   ' msg]);
+        if strcmp(ui.algB.Value,'None'), ui.dasAlg.Value='Algorithm A'; end
+        onDASReplay();
     end
 
     function [img, ms, name] = runAlgorithm(key, gx, gz)
@@ -952,6 +1044,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %  Wave animation
 %% ======================================================================
     function setupAnimation()
+        stopPlayback();
         if isempty(app.S), return; end
         xh = max(ui.xhalf.Value * 1e-3, max(abs(app.S.rx_pos))*1.05);
         tmax = wave_animator('setup_propagation', ui.axAnim, app.S, currentTx(), ...
@@ -978,26 +1071,31 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         if isempty(app.S)
             setStatus('Press [1] Simulate first.'); return;
         end
+        app.dasToken = app.dasToken + 1;
+        app.playToken = app.playToken + 1;
+        token = app.playToken;
         app.playing = true;
         ui.btnPlay.Text = 'Stop';
         spd    = str2double(strrep(ui.speed.Value, 'x', ''));
         tmax   = ui.tslider.Limits(2);
         dur    = SWEEP_SECONDS / spd;      % wall-clock seconds for one sweep
+        if app.animT >= tmax, app.animT = 0; end
         tStart = app.animT;
         clk    = tic;
-        while app.playing && isvalid(ui.fig)
+        while isvalid(ui.fig) && app.playing && token == app.playToken
             % Real-time pacing: the simulated time is derived from the elapsed
             % wall-clock time, so dropped frames slow the frame rate but never
             % speed up the wave.
-            t = mod(tStart + tmax * toc(clk) / dur, tmax);
+            t = min(tStart + tmax * toc(clk) / dur, tmax);
             app.animT = t;
             ui.tslider.Value = t;
             wave_animator('draw_propagation', ui.axAnim, t);
             ui.lblT.Text = sprintf('t = %.2f us', t*1e6);
             drawnow limitrate;
+            if t >= tmax, break; end
             pause(0.01);                   % yield and keep the CPU load sane
         end
-        if isvalid(ui.fig)
+        if isvalid(ui.fig) && token == app.playToken
             app.playing = false;
             ui.btnPlay.Text = 'Play';
         end
@@ -1008,6 +1106,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %% ======================================================================
     function updateDelayViews()
         if isempty(app.S), return; end
+        drawDelayBmode();
         k = currentTx();
         note = '';
         try
@@ -1028,15 +1127,139 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
             note = ['  - ' ME.message];
         end
         tau = tau(1, :);
-        wave_animator('delay_curve', ui.axRF, app.S, k, tau, app.pt);
+        wave_animator('delay_curve', ui.axRF, app.S, k, tau, app.pt, delayViewLims());
         wave_animator('alignment', ui.axPre, ui.axPost, app.S, k, tau, app.pt);
         ui.lblDelayInfo.Text = sprintf('Delays from: %s   %d / %d elements used%s', ...
             name, sum(isfinite(tau)), numel(tau), note);
     end
 
+    function lims = delayViewLims()
+        %DELAYVIEWLIMS  [xmin xmax zmin zmax] in mm of the delay tab's B-mode.
+        %  The RF panel next to it is drawn on exactly these limits, so the
+        %  two images share a field of view and an aspect ratio. Before the
+        %  first beamforming there is no image yet, so fall back to the
+        %  reconstruction grid the B-mode is about to use.
+        if isempty(app.imgA)
+            [gx, gz] = reconGrid();
+        else
+            gx = app.gx; gz = app.gz;
+        end
+        lims = [gx(1) gx(end) gz(1) gz(end)] * 1e3;
+    end
+
+    function drawDelayBmode()
+        ax = ui.axDelayBmode;
+        cla(ax,'reset');
+        if isempty(app.imgA)
+            text(ax,.5,.5,'Press [2] Beamform / Compare','Units','normalized', ...
+                'HorizontalAlignment','center');
+            title(ax,'B-mode A: select a pixel after beamforming');
+            axis(ax,'off');
+            return;
+        end
+        axis(ax,'on');
+        dr=ui.dr.Value;
+        L=20*log10(app.imgA/max([app.imgA(:);eps])+1e-12);
+        im=imagesc(ax,app.gx*1e3,app.gz*1e3,L);
+        im.PickableParts='none';
+        colormap(ax,gray(256)); set(ax,'CLim',[-dr 0],'YDir','reverse');
+        hold(ax,'on');
+        plot(ax,app.pt(1)*1e3,app.pt(2)*1e3,'o','MarkerSize',10, ...
+            'LineWidth',2,'MarkerEdgeColor',[1 .25 .1],'PickableParts','none');
+        hold(ax,'off'); axis(ax,'image');
+        xlim(ax,[app.gx(1) app.gx(end)]*1e3); ylim(ax,[app.gz(1) app.gz(end)]*1e3);
+        xlabel(ax,'x [mm]'); ylabel(ax,'z [mm]');
+        title(ax,'B-mode A: click / drag the pixel');
+        ax.ButtonDownFcn=@onDelayPointPress;
+    end
+
 %% ======================================================================
 %  Small helpers
 %% ======================================================================
+
+    function stopPlayback()
+        app.playing = false;
+        app.playToken = app.playToken + 1;
+        app.dasToken = app.dasToken + 1;
+        ui.btnPlay.Text = 'Play';
+    end
+
+    function buildTabDAS()
+        ui.tabDAS = uitab(ui.tabs, 'Title', 'DAS execution replay');
+        g = uigridlayout(ui.tabDAS, [3 2]);
+        g.RowHeight = {36, '1x', '1x'};
+        bar = uigridlayout(g, [1 4]); bar.Layout.Column = [1 2];
+        bar.ColumnWidth = {150, 100, 100, '1x'};
+        ui.dasAlg = uidropdown(bar, 'Items', {'Algorithm A','Algorithm B'}, 'Value', 'Algorithm B');
+        uibutton(bar, 'Text', 'Replay DAS', 'ButtonPushedFcn', @(s,e) onDASReplay());
+        uibutton(bar, 'Text', 'Stop', 'ButtonPushedFcn', @(s,e) stopPlayback());
+        ui.dasInfo = uilabel(bar, 'Text', 'Exact channel increments from your DAS; select a point in B-mode.');
+        ui.dasAxes = gobjects(1,4);
+        for j = 1:4, ui.dasAxes(j) = uiaxes(g); end
+    end
+
+    function onDASReplay()
+        stopPlayback();
+        if isempty(app.S), return; end
+        ui.tabs.SelectedTab = ui.tabDAS;
+        key = ui.algA.Value;
+        if strcmp(ui.dasAlg.Value, 'Algorithm B'), key = ui.algB.Value; end
+        try
+            [fh, name] = algoHandle(key);
+            [~, gz] = reconGrid(); k = currentTx();
+            % Execute the chosen implementation on the entire selected scan line.
+            [env, tau, tr] = fh(app.S.RF(:,:,k), app.S.tx(k), app.S.rx_pos, ...
+                app.pt(1), gz, app.S.c, app.S.fs);
+            C = tr.contributions;
+            assert(isequal(size(C), [numel(gz), size(app.S.RF,2)]) && all(isfinite(C(:))), 'Invalid execution trace.');
+            assert(max(abs(sum(C,2)-tr.coherent(:))) < 1e-9*max(1,max(abs(tr.coherent(:)))), 'Trace does not match coherent sum.');
+        catch ME
+            for j=1:4, cla(ui.dasAxes(j)); end
+            ui.dasInfo.Text = ['Trace unavailable: ' ME.message];
+            return;
+        end
+        [~, iz] = min(abs(gz-app.pt(2)));
+        wave_animator('delay_curve', ui.dasAxes(1), app.S, k, tau(iz,:), [app.pt(1),gz(iz)]);
+        valid=tau(iz,isfinite(tau(iz,:)))*1e6;
+        if ~isempty(valid), ylim(ui.dasAxes(1),[min(valid)-.5,max(valid)+.5]); end
+        hold(ui.dasAxes(1),'on');
+        cursor=xline(ui.dasAxes(1),1,'Color',[.1 .7 1]);
+        hold(ui.dasAxes(1),'off');
+
+        heat=imagesc(ui.dasAxes(2),1:size(C,2),gz*1e3,zeros(size(C)));
+        clim(ui.dasAxes(2),[-1 1]*max(max(abs(C(:))),eps));
+        xlabel(ui.dasAxes(2),'Receive element'); ylabel(ui.dasAxes(2),'Depth [mm]');
+        title(ui.dasAxes(2),'Actual delayed + weighted RF contributions');
+        u=linspace(0,1,128)';
+        colormap(ui.dasAxes(2),[u,u,ones(128,1);ones(128,1),flipud(u),flipud(u)]);
+
+        a=ui.dasAxes(3); cla(a); hold(a,'on');
+        plot(a,gz*1e3,tr.coherent(:),':','Color',[.6 .6 .6]);
+        h=plot(a,gz*1e3,zeros(size(gz)),'b','LineWidth',1.5); hold(a,'off');
+        partial=cumsum(C,2); lim=max(abs(partial(:))); ylim(a,[-1 1]*max(lim,eps)*1.1);
+        xlabel(a,'Depth [mm]'); ylabel(a,'Signed RF sum');
+
+        a=ui.dasAxes(4); cla(a);
+        plot(a,gz*1e3,env(:),'Color',[.8 .3 .1]);
+        xlabel(a,'Depth [mm]'); ylabel(a,'Linear envelope');
+        title(a,'Final envelope returned by selected DAS');
+        span=[max(gz(1)*1e3,gz(iz)*1e3-2),min(gz(end)*1e3,gz(iz)*1e3+2)];
+        if span(2)>span(1), ylim(ui.dasAxes(2),span); xlim(ui.dasAxes(3),span); end
+
+        token=app.dasToken; clk=tic; n=size(C,2); sums=cumsum(C,2);
+        while isvalid(ui.fig) && token==app.dasToken
+            count=min(n,floor(toc(clk)/8*n));
+            if count>0, h.YData=sums(:,count); end
+            shown=C; shown(:,count+1:end)=0; heat.CData=shown;
+            cursor.Value=max(1,count);
+            title(ui.dasAxes(3),sprintf('Coherent sum: %d / %d channels',count,n));
+            ui.dasInfo.Text=sprintf('%s | TX %d | x=%.2f mm | channel %d/%d',name,k,app.pt(1)*1e3,count,n);
+            drawnow limitrate;
+            if count==n, break; end
+            pause(.03);
+        end
+    end
+
     function setStatus(msg)
         ui.status.Text = ['  ' msg];
         drawnow limitrate;

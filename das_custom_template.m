@@ -1,4 +1,6 @@
-function [bmode_img, delays] = das_custom_template(rf_data, tx_info, rx_pos, grid_x, grid_z, sound_speed, fs)
+function [bmode_img, delays, trace] = das_custom_template(rf_data, tx_info, rx_pos, grid_x, grid_z, sound_speed, fs)
+% Optional third output trace records actual channel increments and coherent RF.
+% See docs/HW3_DAS.md; retain the accumulation hook in custom implementations.
 %DAS_CUSTOM_TEMPLATE  Skeleton for writing your own DAS beamformer.
 %
 %   [bmode_img, delays] = DAS_CUSTOM_TEMPLATE(rf_data, tx_info, rx_pos, ...
@@ -113,6 +115,12 @@ end
 %  implementation exactly, which makes a handy self-check.
 %% =====================================================================
 bf = zeros(Npix, 1);
+% Optional execution trace: record the exact increment at the summation site.
+% Keep this hook when editing DAS. Request only a scan line to bound memory.
+trace = [];
+if nargout > 2
+    trace.contributions = zeros(Npix, Nel);
+end
 if nargout > 1
     delays = nan(Npix, Nel);
 end
@@ -130,7 +138,11 @@ for e = 1:Nel
     val = rf_data(idxc, e);
     val(~ok) = 0;
 
+    if nargout > 2, previous = bf; end
     bf = bf + w .* val;
+    if nargout > 2
+        trace.contributions(:, e) = bf - previous;
+    end
 
     if nargout > 1
         d = tau; d(~ok) = NaN;
@@ -152,5 +164,7 @@ end
 %  [STEP 5] Post-processing (TGC, speckle reduction, ...) goes here
 %% =====================================================================
 % bmode_img = ...;
+
+if nargout > 2, trace.coherent = reshape(bf, imgSize); end
 
 end

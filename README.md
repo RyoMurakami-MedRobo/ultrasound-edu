@@ -283,3 +283,10 @@ If this tool is useful in teaching or research, please cite it - see
 [`CITATION.cff`](CITATION.cff) or the draft paper in [`paper/`](paper/). This
 project is MIT-licensed (see [`LICENSE`](LICENSE)); MUST itself is licensed
 separately under LGPLv3 by its authors.
+
+### HW3 and automatic DAS replay
+
+Simulate now opens and plays the wave animation. Beamform / Compare opens
+the recorded execution of the selected DAS, with actual channel contributions
+and coherent accumulation. Supports 128, 256 and 512 elements.
+See [HW3 experiment guide](docs/HW3_DAS.md) for custom trace hooks and Field II scope.
