@@ -17,7 +17,7 @@ def main() -> int:
         return subprocess.call([sys.executable, "-m", "pytest", "-q", str(HERE / "tests")])
     except ImportError:
         rc = 0
-        for name in ("test_contract.py", "test_parity.py"):
+        for name in ("test_contract.py", "test_parity.py", "test_trace.py"):
             print(f"=== {name} ===")
             rc |= subprocess.call([sys.executable, str(HERE / "tests" / name)])
         return rc

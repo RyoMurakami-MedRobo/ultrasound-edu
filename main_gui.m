@@ -39,6 +39,9 @@ app.pt       = [0 20e-3];
 app.cursorXZ = [0 20];  % last clicked phantom coordinate [mm]
 app.playing  = false;
 app.animT    = 0;
+app.playToken = 0;
+app.dasToken = 0;
+app.delayDragging = false;
 
 % Wall-clock duration of one full animation sweep at 1x speed [s].
 % The playback loop is paced against real time rather than frame count,
@@ -99,6 +102,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         buildTabCompare();
         buildTabAnim();
         buildTabDelay();
+        buildTabDAS();
 
         % ---------- Status bar ----------
         ui.status = uilabel(g, 'Text', '', 'FontSize', 12, ...
@@ -143,7 +147,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
     function buildProbeBasic(parent)
         gg = section(parent, 'Transducer', repmat({22}, 1, 2));
         lab(gg, 'Elements', 1);
-        ui.nel   = put(uidropdown(gg, 'Items', {'16','32','64','128','192'}, ...
+        ui.nel   = put(uidropdown(gg, 'Items', {'16','32','64','128','192','256','512'}, ...
                         'Value', '64', 'Editable', 'on', ...
                         'ValueChangedFcn', @(s,e) drawPhantom()), 1, 2);
         lab(gg, 'Centre frequency [MHz]', 2);
@@ -329,6 +333,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
     %% ---------------- Tab 3: wave animation ----------------
     function buildTabAnim()
         t  = uitab(ui.tabs, 'Title', 'Wave animation');
+        ui.tabAnim = t;
         gg = uigridlayout(t, [2 1]);
         gg.RowHeight = {'1x', 40}; gg.Padding = [8 8 8 8];
         ui.axAnim = uiaxes(gg);
@@ -353,17 +358,19 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         t  = uitab(ui.tabs, 'Title', 'Delay curve & alignment');
         gg = uigridlayout(t, [2 1]);
         gg.RowHeight = {'1x', 36}; gg.Padding = [8 8 8 8];
-        ag = uigridlayout(gg, [1 3]);
-        ag.ColumnWidth = {'1x','1x','1x'}; ag.Padding = [0 0 0 0];
+        ag = uigridlayout(gg, [1 4]);
+        ag.ColumnWidth = {'1x','1x','1x','1x'}; ag.Padding = [0 0 0 0];
+        ui.axDelayBmode = uiaxes(ag);
         ui.axRF   = uiaxes(ag);
         ui.axPre  = uiaxes(ag);
         ui.axPost = uiaxes(ag);
+        title(ui.axDelayBmode, 'B-mode A: click / drag a pixel');
         title(ui.axRF, 'RF data + delay curve');
 
         cg = uigridlayout(gg, [1 6]);
         cg.ColumnWidth = {260, 60, 80, 60, 80, '1x'};
         cg.Padding = [0 0 0 0]; cg.ColumnSpacing = 6;
-        uilabel(cg, 'Text', 'Reconstruction point (or click the B-mode image):');
+        uilabel(cg, 'Text', 'Reconstruction pixel (click / drag B-mode at left):');
         uilabel(cg, 'Text', 'X [mm]', 'HorizontalAlignment', 'right');
         ui.ptx = uieditfield(cg, 'numeric', 'Value', 0, ...
             'ValueChangedFcn', @(s,e) onPointEdited());
@@ -523,6 +530,37 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         updateDelayViews();
     end
 
+    function onDelayPointPress(ax, ~)
+        app.delayDragging = true;
+        setDelayPointFromAxes(ax);
+        ui.fig.WindowButtonMotionFcn = @(s,e) onDelayPointDrag();
+        ui.fig.WindowButtonUpFcn = @(s,e) onDelayPointRelease();
+    end
+
+    function onDelayPointDrag()
+        if app.delayDragging && isvalid(ui.axDelayBmode)
+            setDelayPointFromAxes(ui.axDelayBmode);
+        end
+    end
+
+    function onDelayPointRelease()
+        app.delayDragging = false;
+        ui.fig.WindowButtonMotionFcn = '';
+        ui.fig.WindowButtonUpFcn = '';
+    end
+
+    function setDelayPointFromAxes(ax)
+        if isempty(app.gx) || isempty(app.gz), return; end
+        cp = ax.CurrentPoint;
+        x = min(max(cp(1,1), app.gx(1)*1e3), app.gx(end)*1e3);
+        z = min(max(cp(1,2), app.gz(1)*1e3), app.gz(end)*1e3);
+        app.pt = [x z]*1e-3;
+        ui.ptx.Value = x;
+        ui.ptz.Value = z;
+        refreshImages();
+        updateDelayViews();
+    end
+
     function onPointEdited()
         app.pt = [ui.ptx.Value*1e-3, ui.ptz.Value*1e-3];
         refreshImages();
@@ -587,7 +625,9 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %% ======================================================================
 %  Run: simulation
 %% ======================================================================
-    function onSimulate()
+    function onSimulate(autoPlay)
+        if nargin < 1, autoPlay = true; end
+        stopPlayback();
         cfg = readCfg();
         setStatus('Simulating...'); drawnow;
         try
@@ -605,6 +645,8 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         setStatus(sprintf(['RF generated | backend = %s | %d transmit event(s) | ' ...
             'RF %d x %d | fs = %.1f MHz | %.2f s'], app.S.backend, numel(app.S.tx), ...
             size(app.S.RF,1), size(app.S.RF,2), app.S.fs/1e6, app.S.elapsed));
+        ui.tabs.SelectedTab = ui.tabAnim;
+        if autoPlay, onPlayToggle(); end
     end
 
     function updateTxEventList()
@@ -626,8 +668,9 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %  Run: beamforming and comparison
 %% ======================================================================
     function onBeamform()
+        stopPlayback();
         if isempty(app.S)
-            onSimulate();
+            onSimulate(false);
             if isempty(app.S), return; end
         end
         [gx, gz] = reconGrid();
@@ -666,6 +709,8 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
             msg = sprintf('%s   |   B: %s = %.1f ms', msg, app.nameB, app.msB);
         end
         setStatus(['Beamforming done.   ' msg]);
+        if strcmp(ui.algB.Value,'None'), ui.dasAlg.Value='Algorithm A'; end
+        onDASReplay();
     end
 
     function [img, ms, name] = runAlgorithm(key, gx, gz)
@@ -952,6 +997,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %  Wave animation
 %% ======================================================================
     function setupAnimation()
+        stopPlayback();
         if isempty(app.S), return; end
         xh = max(ui.xhalf.Value * 1e-3, max(abs(app.S.rx_pos))*1.05);
         tmax = wave_animator('setup_propagation', ui.axAnim, app.S, currentTx(), ...
@@ -978,26 +1024,31 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         if isempty(app.S)
             setStatus('Press [1] Simulate first.'); return;
         end
+        app.dasToken = app.dasToken + 1;
+        app.playToken = app.playToken + 1;
+        token = app.playToken;
         app.playing = true;
         ui.btnPlay.Text = 'Stop';
         spd    = str2double(strrep(ui.speed.Value, 'x', ''));
         tmax   = ui.tslider.Limits(2);
         dur    = SWEEP_SECONDS / spd;      % wall-clock seconds for one sweep
+        if app.animT >= tmax, app.animT = 0; end
         tStart = app.animT;
         clk    = tic;
-        while app.playing && isvalid(ui.fig)
+        while isvalid(ui.fig) && app.playing && token == app.playToken
             % Real-time pacing: the simulated time is derived from the elapsed
             % wall-clock time, so dropped frames slow the frame rate but never
             % speed up the wave.
-            t = mod(tStart + tmax * toc(clk) / dur, tmax);
+            t = min(tStart + tmax * toc(clk) / dur, tmax);
             app.animT = t;
             ui.tslider.Value = t;
             wave_animator('draw_propagation', ui.axAnim, t);
             ui.lblT.Text = sprintf('t = %.2f us', t*1e6);
             drawnow limitrate;
+            if t >= tmax, break; end
             pause(0.01);                   % yield and keep the CPU load sane
         end
-        if isvalid(ui.fig)
+        if isvalid(ui.fig) && token == app.playToken
             app.playing = false;
             ui.btnPlay.Text = 'Play';
         end
@@ -1008,6 +1059,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
 %% ======================================================================
     function updateDelayViews()
         if isempty(app.S), return; end
+        drawDelayBmode();
         k = currentTx();
         note = '';
         try
@@ -1034,9 +1086,119 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
             name, sum(isfinite(tau)), numel(tau), note);
     end
 
+    function drawDelayBmode()
+        ax = ui.axDelayBmode;
+        cla(ax,'reset');
+        if isempty(app.imgA)
+            text(ax,.5,.5,'Press [2] Beamform / Compare','Units','normalized', ...
+                'HorizontalAlignment','center');
+            title(ax,'B-mode A: select a pixel after beamforming');
+            axis(ax,'off');
+            return;
+        end
+        axis(ax,'on');
+        dr=ui.dr.Value;
+        L=20*log10(app.imgA/max([app.imgA(:);eps])+1e-12);
+        im=imagesc(ax,app.gx*1e3,app.gz*1e3,L);
+        im.PickableParts='none';
+        colormap(ax,gray(256)); set(ax,'CLim',[-dr 0],'YDir','reverse');
+        hold(ax,'on');
+        plot(ax,app.pt(1)*1e3,app.pt(2)*1e3,'o','MarkerSize',10, ...
+            'LineWidth',2,'MarkerEdgeColor',[1 .25 .1],'PickableParts','none');
+        hold(ax,'off'); axis(ax,'image');
+        xlim(ax,[app.gx(1) app.gx(end)]*1e3); ylim(ax,[app.gz(1) app.gz(end)]*1e3);
+        xlabel(ax,'x [mm]'); ylabel(ax,'z [mm]');
+        title(ax,'B-mode A: click / drag the beamforming pixel');
+        ax.ButtonDownFcn=@onDelayPointPress;
+    end
+
 %% ======================================================================
 %  Small helpers
 %% ======================================================================
+
+    function stopPlayback()
+        app.playing = false;
+        app.playToken = app.playToken + 1;
+        app.dasToken = app.dasToken + 1;
+        ui.btnPlay.Text = 'Play';
+    end
+
+    function buildTabDAS()
+        ui.tabDAS = uitab(ui.tabs, 'Title', 'DAS execution replay');
+        g = uigridlayout(ui.tabDAS, [3 2]);
+        g.RowHeight = {36, '1x', '1x'};
+        bar = uigridlayout(g, [1 4]); bar.Layout.Column = [1 2];
+        bar.ColumnWidth = {150, 100, 100, '1x'};
+        ui.dasAlg = uidropdown(bar, 'Items', {'Algorithm A','Algorithm B'}, 'Value', 'Algorithm B');
+        uibutton(bar, 'Text', 'Replay DAS', 'ButtonPushedFcn', @(s,e) onDASReplay());
+        uibutton(bar, 'Text', 'Stop', 'ButtonPushedFcn', @(s,e) stopPlayback());
+        ui.dasInfo = uilabel(bar, 'Text', 'Exact channel increments from your DAS; select a point in B-mode.');
+        ui.dasAxes = gobjects(1,4);
+        for j = 1:4, ui.dasAxes(j) = uiaxes(g); end
+    end
+
+    function onDASReplay()
+        stopPlayback();
+        if isempty(app.S), return; end
+        ui.tabs.SelectedTab = ui.tabDAS;
+        key = ui.algA.Value;
+        if strcmp(ui.dasAlg.Value, 'Algorithm B'), key = ui.algB.Value; end
+        try
+            [fh, name] = algoHandle(key);
+            [~, gz] = reconGrid(); k = currentTx();
+            % Execute the chosen implementation on the entire selected scan line.
+            [env, tau, tr] = fh(app.S.RF(:,:,k), app.S.tx(k), app.S.rx_pos, ...
+                app.pt(1), gz, app.S.c, app.S.fs);
+            C = tr.contributions;
+            assert(isequal(size(C), [numel(gz), size(app.S.RF,2)]) && all(isfinite(C(:))), 'Invalid execution trace.');
+            assert(max(abs(sum(C,2)-tr.coherent(:))) < 1e-9*max(1,max(abs(tr.coherent(:)))), 'Trace does not match coherent sum.');
+        catch ME
+            for j=1:4, cla(ui.dasAxes(j)); end
+            ui.dasInfo.Text = ['Trace unavailable: ' ME.message];
+            return;
+        end
+        [~, iz] = min(abs(gz-app.pt(2)));
+        wave_animator('delay_curve', ui.dasAxes(1), app.S, k, tau(iz,:), [app.pt(1),gz(iz)]);
+        valid=tau(iz,isfinite(tau(iz,:)))*1e6;
+        if ~isempty(valid), ylim(ui.dasAxes(1),[min(valid)-.5,max(valid)+.5]); end
+        hold(ui.dasAxes(1),'on');
+        cursor=xline(ui.dasAxes(1),1,'Color',[.1 .7 1]);
+        hold(ui.dasAxes(1),'off');
+
+        heat=imagesc(ui.dasAxes(2),1:size(C,2),gz*1e3,zeros(size(C)));
+        clim(ui.dasAxes(2),[-1 1]*max(max(abs(C(:))),eps));
+        xlabel(ui.dasAxes(2),'Receive element'); ylabel(ui.dasAxes(2),'Depth [mm]');
+        title(ui.dasAxes(2),'Actual delayed + weighted RF contributions');
+        u=linspace(0,1,128)';
+        colormap(ui.dasAxes(2),[u,u,ones(128,1);ones(128,1),flipud(u),flipud(u)]);
+
+        a=ui.dasAxes(3); cla(a); hold(a,'on');
+        plot(a,gz*1e3,tr.coherent(:),':','Color',[.6 .6 .6]);
+        h=plot(a,gz*1e3,zeros(size(gz)),'b','LineWidth',1.5); hold(a,'off');
+        partial=cumsum(C,2); lim=max(abs(partial(:))); ylim(a,[-1 1]*max(lim,eps)*1.1);
+        xlabel(a,'Depth [mm]'); ylabel(a,'Signed RF sum');
+
+        a=ui.dasAxes(4); cla(a);
+        plot(a,gz*1e3,env(:),'Color',[.8 .3 .1]);
+        xlabel(a,'Depth [mm]'); ylabel(a,'Linear envelope');
+        title(a,'Final envelope returned by selected DAS');
+        span=[max(gz(1)*1e3,gz(iz)*1e3-2),min(gz(end)*1e3,gz(iz)*1e3+2)];
+        if span(2)>span(1), ylim(ui.dasAxes(2),span); xlim(ui.dasAxes(3),span); end
+
+        token=app.dasToken; clk=tic; n=size(C,2); sums=cumsum(C,2);
+        while isvalid(ui.fig) && token==app.dasToken
+            count=min(n,floor(toc(clk)/8*n));
+            if count>0, h.YData=sums(:,count); end
+            shown=C; shown(:,count+1:end)=0; heat.CData=shown;
+            cursor.Value=max(1,count);
+            title(ui.dasAxes(3),sprintf('Coherent sum: %d / %d channels',count,n));
+            ui.dasInfo.Text=sprintf('%s | TX %d | x=%.2f mm | channel %d/%d',name,k,app.pt(1)*1e3,count,n);
+            drawnow limitrate;
+            if count==n, break; end
+            pause(.03);
+        end
+    end
+
     function setStatus(msg)
         ui.status.Text = ['  ' msg];
         drawnow limitrate;

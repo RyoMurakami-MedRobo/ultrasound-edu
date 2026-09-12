@@ -94,6 +94,9 @@ class App:
         self.gx = self.gz = None
         self.pt = np.array([0.0, 20e-3])
         self.playing = False
+        self._play_token = 0
+        self._das_token = 0
+        self._delay_dragging = False
         self.anim_t = 0.0
         self.wave: WavePropagation | None = None
         self._bwr = ListedColormap(blue_white_red())
@@ -133,6 +136,7 @@ class App:
         self._build_tab_compare()
         self._build_tab_anim()
         self._build_tab_delay()
+        self._build_tab_das()
 
         self.status = ttk.Label(self.root, text="", relief="sunken", anchor="w")
         self.status.pack(side="bottom", fill="x")
@@ -186,7 +190,7 @@ class App:
         self._combo(hdr, "Mode", "mode", ("Simple", "Detailed"), "Simple", self._apply_mode)
 
         s = self._section(p, "Transducer")
-        self._combo(s, "Elements", "nel", ("16", "32", "64", "128", "192"), "64", self._draw_phantom)
+        self._combo(s, "Elements", "nel", ("16", "32", "64", "128", "192", "256", "512"), "64", self._draw_phantom)
         self._num(s, "Centre frequency [MHz]", "fc", 5)
 
         self.adv_probe = self._section(p, "Transducer (advanced)")
@@ -280,6 +284,7 @@ class App:
     def _build_tab_anim(self):
         t = ttk.Frame(self.nb)
         self.nb.add(t, text="Wave animation")
+        self.tab_anim = t
         self.ax_anim = _Axes(t, 1)
         bar = ttk.Frame(t)
         bar.pack(fill="x")
@@ -301,10 +306,13 @@ class App:
     def _build_tab_delay(self):
         t = ttk.Frame(self.nb)
         self.nb.add(t, text="Delay curve & alignment")
-        self.ax_dl = _Axes(t, 3, (1, 3))
+        self.ax_dl = _Axes(t, 4, (1, 4))
+        self.ax_dl.fig.canvas.mpl_connect("button_press_event", self._on_delay_press)
+        self.ax_dl.fig.canvas.mpl_connect("motion_notify_event", self._on_delay_motion)
+        self.ax_dl.fig.canvas.mpl_connect("button_release_event", self._on_delay_release)
         bar = ttk.Frame(t)
         bar.pack(fill="x")
-        ttk.Label(bar, text="Reconstruction point (or click B-mode A):  X [mm]").pack(side="left")
+        ttk.Label(bar, text="Reconstruction pixel (click / drag B-mode at left):  X [mm]").pack(side="left")
         self.v["ptx"] = tk.StringVar(value="0")
         e1 = ttk.Entry(bar, textvariable=self.v["ptx"], width=7)
         e1.pack(side="left")
@@ -474,6 +482,30 @@ class App:
         self._refresh_images()
         self._update_delay_views()
 
+    def _on_delay_press(self, event):
+        if (event.button == 1 and self.imgA is not None
+                and event.inaxes is self.ax_dl.ax[0]):
+            self._delay_dragging = True
+            self._set_delay_point_from_event(event)
+
+    def _on_delay_motion(self, event):
+        if self._delay_dragging and event.inaxes is self.ax_dl.ax[0]:
+            self._set_delay_point_from_event(event)
+
+    def _on_delay_release(self, event):
+        self._delay_dragging = False
+
+    def _set_delay_point_from_event(self, event):
+        if event.xdata is None or event.ydata is None or self.gx is None or self.gz is None:
+            return
+        x = float(np.clip(event.xdata, self.gx[0]*1e3, self.gx[-1]*1e3))
+        z = float(np.clip(event.ydata, self.gz[0]*1e3, self.gz[-1]*1e3))
+        self.pt = np.array([x, z])*1e-3
+        self.v["ptx"].set(f"{x:.2f}")
+        self.v["ptz"].set(f"{z:.2f}")
+        self._refresh_images()
+        self._update_delay_views()
+
     # ------------------------------------------------------------------
     #  config
     # ------------------------------------------------------------------
@@ -516,7 +548,8 @@ class App:
     # ------------------------------------------------------------------
     #  run
     # ------------------------------------------------------------------
-    def _on_simulate(self):
+    def _on_simulate(self, auto_play=True):
+        self._stop_playback()
         cfg = self._read_cfg()
         self._set_status("Simulating...")
         self.root.update_idletasks()
@@ -539,6 +572,10 @@ class App:
             f"{self.S.elapsed:.2f} s"
         )
 
+        self.nb.select(self.tab_anim)
+        if auto_play:
+            self._play_toggle()
+
     def _current_tx(self):
         try:
             return max(0, int(self.v["txsel"].get().split()[-1]) - 1)
@@ -546,18 +583,23 @@ class App:
             return 0
 
     def _algo_callable(self, key):
-        if key in ALGORITHMS:
+        if key in ALGORITHMS and key != "Custom DAS":
             return ALGORITHMS[key], key
+        if key != "Custom DAS":
+            raise ValueError(f"No replayable algorithm selected: {key}")
         spec = self.v["customfn"].get().strip()
         mod, _, fn = spec.partition(":")
         if not fn:
             raise ValueError("Custom function must be 'module:function'.")
+        importlib.invalidate_caches()
         m = importlib.import_module(mod)
+        m = importlib.reload(m)
         return getattr(m, fn), fn
 
     def _on_beamform(self):
+        self._stop_playback()
         if self.S is None:
-            self._on_simulate()
+            self._on_simulate(auto_play=False)
             if self.S is None:
                 return
         gx, gz = self._recon_grid()
@@ -592,6 +634,9 @@ class App:
         if self.imgB is not None:
             msg += f"   |   B: {self.nameB} = {self.msB:.1f} ms"
         self._set_status("Beamforming done.   " + msg)
+        if self.v["algB"].get() == "None":
+            self.v["das_alg"].set("Algorithm A")
+        self._replay_das()
 
     # ------------------------------------------------------------------
     #  drawing
@@ -627,7 +672,7 @@ class App:
             return
         ax.axis("on")
         dr = self._f("dr", 50)
-        L = 20 * np.log10(img / np.max(img) + 1e-12)
+        L = 20 * np.log10(img / max(float(np.max(img)), np.finfo(float).eps) + 1e-12)
         ax.imshow(L, extent=[self.gx[0] * 1e3, self.gx[-1] * 1e3, self.gz[-1] * 1e3, self.gz[0] * 1e3],
                   cmap="gray", vmin=-dr, vmax=0, aspect="equal")
         D = self._table_data()
@@ -695,7 +740,114 @@ class App:
     # ------------------------------------------------------------------
     #  wave animation
     # ------------------------------------------------------------------
+    def _stop_playback(self):
+        self.playing = False
+        self._play_token += 1
+        self._das_token += 1
+        self.btn_play.configure(text="Play")
+
+    def _build_tab_das(self):
+        self.tab_das = ttk.Frame(self.nb)
+        self.nb.add(self.tab_das, text="DAS execution replay")
+        bar = ttk.Frame(self.tab_das)
+        bar.pack(fill="x")
+        self.v["das_alg"] = tk.StringVar(value="Algorithm B")
+        ttk.Combobox(bar, textvariable=self.v["das_alg"], state="readonly",
+                     values=("Algorithm A", "Algorithm B"), width=13).pack(side="left")
+        ttk.Button(bar, text="Replay DAS", command=self._replay_das).pack(side="left")
+        ttk.Button(bar, text="Stop", command=self._stop_playback).pack(side="left")
+        self.das_info = ttk.Label(
+            bar, text="Exact increments from your DAS. Select a point in B-mode."
+        )
+        self.das_info.pack(side="left", padx=8)
+        self.ax_das = _Axes(self.tab_das, 4, (2, 2))
+
+    def _replay_das(self):
+        self._stop_playback()
+        if self.S is None:
+            return
+        self.nb.select(self.tab_das)
+        for ax in self.ax_das.ax:
+            ax.clear()
+        key = self.v["algB" if self.v["das_alg"].get() == "Algorithm B" else "algA"].get()
+        try:
+            fh, name = self._algo_callable(key)
+            _, gz = self._recon_grid()
+            k = self._current_tx()
+            env, tau, tr = fh(self.S.RF[:, :, k], self.S.tx[k], self.S.rx_pos,
+                              np.array([self.pt[0]]), gz, self.S.c, self.S.fs,
+                              want_trace=True)
+            C = np.asarray(tr["contributions"])
+            coherent = np.asarray(tr["coherent"]).ravel(order="F")
+            if C.shape != (len(gz), self.S.RF.shape[1]) or not np.all(np.isfinite(C)):
+                raise ValueError("Invalid execution trace")
+            if not np.allclose(C.sum(axis=1), coherent, rtol=1e-9, atol=1e-12):
+                raise ValueError("Trace does not match the coherent sum")
+        except Exception as exc:
+            self.das_info.configure(text=f"Trace unavailable: {exc}")
+            self.ax_das.draw()
+            return
+        iz = int(np.argmin(np.abs(gz - self.pt[1])))
+        axrf, axc, axs, axe = self.ax_das.ax
+        rf, t_us, tau_us, ok = delay_curve_image(self.S, k, tau[iz])
+        scale = max(float(np.max(np.abs(rf))), np.finfo(float).eps)
+        n = C.shape[1]
+        axrf.imshow(rf, extent=[0.5, n + 0.5, t_us[-1], t_us[0]],
+                    aspect="auto", cmap="gray", vmin=-scale*.6, vmax=scale*.6)
+        axrf.plot(np.flatnonzero(ok) + 1, tau_us[ok], color="#ff6611")
+        axrf.set(xlabel="Receive element", ylabel="Time [us]",
+                 title=f"Actual delays at z = {gz[iz]*1e3:.2f} mm")
+        if np.any(ok):
+            margin = 2 / self.S.tx[k].fc * 1e6 if hasattr(self.S.tx[k], "fc") else 0.5
+            axrf.set_ylim(float(np.max(tau_us[ok])) + margin,
+                          float(np.min(tau_us[ok])) - margin)
+        cursor = axrf.axvline(1, color="#22bbff")
+
+        cscale = max(float(np.max(np.abs(C))), np.finfo(float).eps)
+        heat = axc.imshow(np.zeros_like(C), extent=[.5, n+.5, gz[-1]*1e3, gz[0]*1e3],
+                          aspect="auto", cmap="RdBu_r", vmin=-cscale, vmax=cscale)
+        axc.set(xlabel="Receive element", ylabel="Depth [mm]",
+                title="Actual delayed + weighted RF contributions")
+        axc.set_ylim(min(gz[-1]*1e3, gz[iz]*1e3+2),
+                     max(gz[0]*1e3, gz[iz]*1e3-2))
+
+        axs.plot(gz*1e3, coherent, ":", color=".6", label="Final coherent sum")
+        line, = axs.plot(gz*1e3, np.zeros(len(gz)), color="#0066cc", label="Accumulating")
+        partial = np.cumsum(C, axis=1)
+        limit = max(float(np.max(np.abs(partial))), np.finfo(float).eps)*1.1
+        axs.set(xlabel="Depth [mm]", ylabel="Signed RF sum", ylim=(-limit, limit),
+                xlim=(max(gz[0]*1e3, gz[iz]*1e3-2), min(gz[-1]*1e3, gz[iz]*1e3+2)))
+        axs.legend(fontsize=8)
+
+        axe.plot(gz*1e3, env.ravel(), color="#cc5511")
+        axe.set(xlabel="Depth [mm]", ylabel="Linear envelope",
+                title="Final envelope returned by selected DAS")
+
+        token = self._das_token
+        clk = time.perf_counter()
+        sums = np.cumsum(C, axis=1)
+
+        def step():
+            if token != self._das_token:
+                return
+            count = min(n, int((time.perf_counter()-clk)/8*n))
+            shown = C.copy()
+            shown[:, count:] = 0
+            heat.set_data(shown)
+            cursor.set_xdata([max(1, count)]*2)
+            line.set_ydata(sums[:, count-1] if count else np.zeros(len(gz)))
+            axs.set_title(f"Coherent sum: {count} / {n} channels")
+            self.das_info.configure(
+                text=f"{name} | TX {k+1} | x={self.pt[0]*1e3:.2f} mm | {count}/{n} channels"
+            )
+            self.ax_das.draw()
+            if count < n:
+                self.root.after(40, step)
+
+        step()
+
     def _setup_animation(self):
+        self._stop_playback()
         if self.S is None:
             return
         xh = max(self._f("xhalf", 12) * 1e-3, np.max(np.abs(self.S.rx_pos)) * 1.05)
@@ -744,24 +896,35 @@ class App:
         if self.wave is None:
             self._set_status("Press [1] Simulate first.")
             return
+        self._das_token += 1
+        self._play_token += 1
+        token = self._play_token
         self.playing = True
         self.btn_play.configure(text="Stop")
         spd = float(self.v["speed"].get().replace("x", ""))
         tmax = self.wave.tmax
         dur = SWEEP_SECONDS / spd
+        if self.anim_t >= tmax:
+            self.anim_t = 0.0
         t_start = self.anim_t
         clk = time.perf_counter()
 
         def step():
+            if token != self._play_token:
+                return
             if not self.playing:
                 self.btn_play.configure(text="Play")
                 return
             # wall-clock pacing (mirrors main_gui.m:988): simulated time is
             # derived from elapsed real time, never from a frame count.
-            t = (t_start + tmax * (time.perf_counter() - clk) / dur) % tmax
+            t = min(t_start + tmax * (time.perf_counter() - clk) / dur, tmax)
             self.anim_t = t
             self.tslider.set(t)
             self._draw_wave(t)
+            if t >= tmax:
+                self.playing = False
+                self.btn_play.configure(text="Play")
+                return
             self.root.after(20, step)
 
         step()
@@ -789,9 +952,27 @@ class App:
             name = f"das_reference (fallback: {exc})"
         tau = tau[0, :]
 
-        axrf, axpre, axpost = self.ax_dl.ax
+        axb, axrf, axpre, axpost = self.ax_dl.ax
         for a in self.ax_dl.ax:
             a.clear()
+
+        if self.imgA is None:
+            axb.text(0.5, 0.5, "Press [2] Beamform / Compare",
+                     transform=axb.transAxes, ha="center", va="center")
+            axb.set_title("B-mode A: select a pixel after beamforming")
+            axb.axis("off")
+        else:
+            axb.axis("on")
+            dr = self._f("dr", 50)
+            peak = max(float(np.max(self.imgA)), np.finfo(float).eps)
+            L = 20*np.log10(self.imgA/peak + 1e-12)
+            axb.imshow(L, extent=[self.gx[0]*1e3, self.gx[-1]*1e3,
+                                  self.gz[-1]*1e3, self.gz[0]*1e3],
+                       cmap="gray", vmin=-dr, vmax=0, aspect="equal")
+            axb.plot(self.pt[0]*1e3, self.pt[1]*1e3, "o", ms=10,
+                     mfc="none", mec="#ff4019", mew=2)
+            axb.set(xlabel="x [mm]", ylabel="z [mm]",
+                    title="B-mode A: click / drag the beamforming pixel")
 
         disp_rf, t_us, tau_us, ok = delay_curve_image(self.S, k, tau)
         nel = disp_rf.shape[1]
@@ -800,10 +981,15 @@ class App:
         idx = np.where(ok)[0]
         axrf.plot(idx + 1, tau_us[ok], "-", color="#ff4019", lw=2)
         axrf.plot(idx + 1, tau_us[ok], ".", color="#ffcc00", ms=6)
-        axrf.invert_yaxis()
         axrf.set_xlabel("Receive element index")
         axrf.set_ylabel("Time [us]")
-        axrf.set_title(f"Delay curve  ({self.pt[0]*1e3:.2f}, {self.pt[1]*1e3:.2f}) mm  {ok.sum()}/{nel} el.")
+        if np.any(ok):
+            span = max(float(np.max(tau_us[ok])-np.min(tau_us[ok])), 0.5)
+            axrf.set_ylim(float(np.max(tau_us[ok])) + .8*span + 1,
+                          float(np.min(tau_us[ok])) - .8*span - 1)
+        else:
+            axrf.set_ylim(t_us[-1], t_us[0])
+        axrf.set_title(f"RF samples for selected pixel\n({self.pt[0]*1e3:.2f}, {self.pt[1]*1e3:.2f}) mm  {ok.sum()}/{nel} el.")
 
         bundles = alignment_bundles(self.S, k, tau)
         if bundles is not None:
@@ -813,9 +999,14 @@ class App:
             st = bundles["sum_trace"]
             ss = np.max(np.abs(st)) + np.finfo(float).eps
             nel_b = bundles["pre"].shape[1]
-            ybase = -0.10 * nel_b - 2
-            axpost.plot(bundles["trel_us"], ybase + 0.9 * (0.06 * nel_b + 2) * st / ss, "-",
+            xbase = nel_b + bundles["gain"] + 3
+            sum_width = max(3, 0.10*nel_b + 2)
+            axpost.plot(xbase + 0.9*sum_width*st/ss, bundles["trel_us"], "-",
                         color="#d91a1a", lw=1.8)
+            axpost.axvline(xbase, color=".6", ls=":")
+            axpost.text(xbase, bundles["trel_us"][0], f"sum peak {np.max(np.abs(st)):.3g}",
+                        color="#d91a1a", ha="center", va="top", fontsize=8)
+            axpost.set_xlim(0, xbase + sum_width + 1)
             axpost.set_title(f"After alignment + sum  ({self.pt[0]*1e3:.2f}, {self.pt[1]*1e3:.2f}) mm")
         self.ax_dl.draw()
         self.lbl_delay.configure(
@@ -827,16 +1018,18 @@ class App:
         g, sc = b["gain"], b["scale"]
         for e in range(nel):
             col = "#0059bf" if b["ok"][e] else "0.75"
-            ax.plot(b["trel_us"], e + 1 + g * W[:, e] / sc, "-", color=col, lw=0.6)
+            ax.plot(e + 1 + g * W[:, e] / sc, b["trel_us"], "-", color=col, lw=0.6)
         if show_tau:
             d = (np.asarray(b["tau"]) - b["tc"]) * 1e6
             idx = np.where(b["ok"])[0]
-            ax.plot(d[b["ok"]], idx + 1, "-", color="#ff4d00", lw=1.2)
-            ax.plot(d[b["ok"]], idx + 1, ".", color="#ff4d00", ms=8)
+            ax.plot(idx + 1, d[b["ok"]], "-", color="#ff4d00", lw=1.2)
+            ax.plot(idx + 1, d[b["ok"]], ".", color="#ff4d00", ms=8)
         else:
-            ax.axvline(0, color="#ff4d00", lw=1.2)
-        ax.set_xlabel("Relative time [us]")
-        ax.set_ylabel("Receive element index")
+            ax.axhline(0, color="#ff4d00", lw=1.2)
+        ax.set_xlabel("Receive element index")
+        ax.set_ylabel("Relative time [us]")
+        ax.set_xlim(0, nel + g + 1)
+        ax.set_ylim(b["trel_us"][-1], b["trel_us"][0])
         ax.grid(True)
 
     # ------------------------------------------------------------------

@@ -24,6 +24,9 @@ INITIAL STATE
     sidelobe floor in the difference image and the lateral profile.
 """
 
+# want_trace=True returns (image, delays, trace) with actual channel increments.
+# Keep the accumulation hook in custom implementations; see docs/HW3_DAS.md.
+
 from __future__ import annotations
 
 import numpy as np
@@ -35,7 +38,7 @@ def _get(tx, name, default):
 
 
 def das_custom_template(
-    rf_data, tx_info, rx_pos, grid_x, grid_z, sound_speed, fs, want_delays: bool = False
+    rf_data, tx_info, rx_pos, grid_x, grid_z, sound_speed, fs, want_delays: bool = False, want_trace: bool = False
 ):
     # ---- [STEP 0] Input handling (usually left untouched) ----
     rf_data = np.asarray(rf_data, dtype=float)
@@ -104,7 +107,9 @@ def das_custom_template(
     #  Nearest-neighbour sampling. Replacing round() with floor() + linear
     #  interpolation should reproduce the reference implementation exactly.
     bf = np.zeros(npix)
-    delays = np.full((npix, nel), np.nan) if want_delays else None
+    delays = np.full((npix, nel), np.nan) if (want_delays or want_trace) else None
+
+    contributions = np.zeros((npix, nel)) if want_trace else None
 
     for e in range(nel):
         dx = xg - rxx[e]
@@ -118,8 +123,11 @@ def das_custom_template(
         idxc = np.clip(idx, 0, nt - 1)
         val = np.where(ok, rf_data[idxc, e], 0.0)
 
+        previous = bf.copy() if want_trace else None
         bf += w * val
-        if want_delays:
+        if want_trace:
+            contributions[:, e] = bf - previous
+        if want_delays or want_trace:
             d = tau.copy()
             d[~ok] = np.nan
             delays[:, e] = d
@@ -135,6 +143,9 @@ def das_custom_template(
 
     # ---- [STEP 5] Post-processing (TGC, speckle reduction, ...) ----
 
+    if want_trace:
+        return bmode_img, delays, {"contributions": contributions,
+                                   "coherent": bf.reshape(img_size, order="F")}
     if want_delays:
         return bmode_img, delays
     return bmode_img

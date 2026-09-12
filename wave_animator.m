@@ -204,7 +204,8 @@ if any(~ok)
          'MarkerSize', 5);
 end
 hold(ax, 'off');
-set(ax, 'YDir', 'normal');
+% Match B-mode convention: earlier/shallow samples are at the top.
+set(ax, 'YDir', 'reverse');
 xlabel(ax, 'Receive element index');
 ylabel(ax, 'Time [\mus]');
 if any(ok)
@@ -249,17 +250,19 @@ drawBundle(axPre,  trel*1e6, pre,  ok, scale, gain, tau, tc);
 title(axPre, sprintf('Before alignment (window at t = %.2f \\mus)', tc*1e6));
 
 drawBundle(axPost, trel*1e6, post, ok, scale, gain, [], []);
-% Draw the coherent sum underneath the bundle
+% Draw the coherent sum to the right of the rotated bundle.
 sumTrace = sum(post(:, ok), 2);
 sScale = max(abs(sumTrace)) + eps;
 hold(axPost, 'on');
-yBase = -0.10*Nel - 2;
-plot(axPost, trel*1e6, yBase + 0.9*(0.06*Nel+2)*sumTrace/sScale, ...
+xBase = Nel + gain + 3;
+sumWidth = max(3, 0.10*Nel + 2);
+plot(axPost, xBase + 0.9*sumWidth*sumTrace/sScale, trel*1e6, ...
      '-', 'Color', [.85 .1 .1], 'LineWidth', 1.8);
-plot(axPost, [trel(1) trel(end)]*1e6, [yBase yBase], ':', 'Color', [.6 .6 .6]);
-text(axPost, trel(1)*1e6, yBase, sprintf('  \\Sigma  (peak %.3g)', max(abs(sumTrace))), ...
-     'Color', [.85 .1 .1], 'VerticalAlignment', 'bottom', 'FontWeight', 'bold');
-ylim(axPost, [yBase - (0.06*Nel+3), Nel + gain + 1]);
+plot(axPost, [xBase xBase], [trel(1) trel(end)]*1e6, ':', 'Color', [.6 .6 .6]);
+text(axPost, xBase, trel(1)*1e6, sprintf('\\Sigma peak %.3g', max(abs(sumTrace))), ...
+     'Color', [.85 .1 .1], 'VerticalAlignment', 'top', ...
+     'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+xlim(axPost, [0, xBase + sumWidth + 1]);
 hold(axPost, 'off');
 title(axPost, sprintf('After alignment + sum  (%.2f, %.2f) mm', pt(1)*1e3, pt(2)*1e3));
 end
@@ -275,21 +278,22 @@ for e = 1:Nel
     else
         col = [.75 .75 .75];
     end
-    plot(ax, tus, e + gain*W(:,e)/scale, '-', 'Color', col, 'LineWidth', 0.6);
+    plot(ax, e + gain*W(:,e)/scale, tus, '-', 'Color', col, 'LineWidth', 0.6);
 end
 if ~isempty(tau)
     % Before alignment: show how the sample to be summed scatters per element
     d = (tau - tc) * 1e6;
-    plot(ax, d(ok), find(ok), '.', 'Color', [1 .3 0], 'MarkerSize', 9);
-    plot(ax, d(ok), find(ok), '-', 'Color', [1 .3 0], 'LineWidth', 1.2);
+    plot(ax, find(ok), d(ok), '.', 'Color', [1 .3 0], 'MarkerSize', 9);
+    plot(ax, find(ok), d(ok), '-', 'Color', [1 .3 0], 'LineWidth', 1.2);
 else
-    plot(ax, [0 0], [0 Nel+gain+1], '-', 'Color', [1 .3 0], 'LineWidth', 1.2);
+    plot(ax, [0 Nel+gain+1], [0 0], '-', 'Color', [1 .3 0], 'LineWidth', 1.2);
 end
 hold(ax, 'off');
-xlabel(ax, 'Relative time [\mus]');
-ylabel(ax, 'Receive element index');
-xlim(ax, [tus(1) tus(end)]);
-ylim(ax, [0, Nel + gain + 1]);
+xlabel(ax, 'Receive element index');
+ylabel(ax, 'Relative time [\mus]');
+xlim(ax, [0, Nel + gain + 1]);
+ylim(ax, [tus(1) tus(end)]);
+set(ax, 'YDir', 'reverse');
 grid(ax, 'on');
 end
 
