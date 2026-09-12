@@ -302,8 +302,14 @@ if ~any(ok)
     return;
 end
 
-trel = linspace(-5/fc, 5/fc, 401);          % +/- 5 periods of the centre frequency
 tc   = mean(tau(ok));
+% The window has to contain the delay curve, or the "before" panel crops the
+% very scatter it exists to show - a wide aperture at shallow depth spreads
+% the delays over far more than a few periods. Five periods of the centre
+% frequency stays the floor, so narrow-aperture cases look as they did.
+spread  = max(tau(ok)) - min(tau(ok));
+halfWin = max(5/fc, 0.65*spread + 1/fc);
+trel = linspace(-halfWin, halfWin, 401);
 
 pre  = zeros(numel(trel), Nel);
 post = zeros(numel(trel), Nel);
@@ -314,7 +320,11 @@ for e = 1:Nel
     end
 end
 scale = max([max(abs(pre(:))), max(abs(post(:))), eps]);
-gain  = 3.0;
+% Trace amplitude in element-index units. A fixed 3.0 reads as a dense
+% bundle across 64 channels but buries an 8-channel one, where neighbours
+% would overlap several deep, so scale it with the channel count and keep
+% the traces clear of each other at the low end.
+gain  = max(0.45, min(3.0, Nel/22));
 
 % The coherent sum is drawn to the right of the aligned bundle; both bundle
 % panels then share these limits, so one element keeps the same horizontal
