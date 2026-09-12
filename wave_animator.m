@@ -17,7 +17,16 @@ function varargout = wave_animator(action, varargin)
 %       Displays the RF data as an image and overlays the delay curve, i.e.
 %       which sample of every element is summed for the reconstruction point
 %       pt. tau is [1 x Nel] of total two-way times [s] (one row of the
-%       delays output of a DAS implementation).
+%       delays output of a DAS implementation). The axes are receive element
+%       index against absolute two-way time.
+%   WAVE_ANIMATOR('delay_curve', ax, S, txIdx, tau, pt, bmodeLims)
+%       Same plot on the B-mode's frame instead: element position [mm]
+%       across, apparent depth c*t/2 [mm] down, equal data aspect and the
+%       limits bmodeLims = [xmin xmax zmin zmax] in mm. Use it when the panel
+%       sits next to a B-mode and the two should be read as one picture.
+%       Note that c*t/2 is an *apparent* depth: tau is the whole two-way
+%       path, so the curve only meets the pixel marker when the transmit leg
+%       equals the receive leg. See the comments in DRAWDELAYCURVE.
 %
 %   ---- Before / after alignment ---------------------------------------
 %   WAVE_ANIMATOR('alignment', axPre, axPost, S, txIdx, tau, pt)
@@ -180,41 +189,102 @@ st.hTitle.String = sprintf(['t = %.2f \\mus   (red: transmit wavefront / ' ...
 end
 
 %% ======================================================================
-function drawDelayCurve(ax, S, txIdx, tau, pt)
+function drawDelayCurve(ax, S, txIdx, tau, pt, bmodeLims)
 %DRAWDELAYCURVE  Overlay the summed-sample locations on the RF image.
-RF = S.RF(:,:,txIdx);
+%  Called without BMODELIMS the panel keeps its native axes: receive element
+%  index against absolute two-way time.
+%
+%  BMODELIMS = [xmin xmax zmin zmax] in mm redraws exactly the same data on
+%  the B-mode's own frame - element position in mm across, apparent depth
+%  c*t/2 in mm down, equal data aspect and identical limits. A pixel in the
+%  B-mode and the apex of its delay curve then land on the same spot of the
+%  panel, which is the whole point of showing the two side by side.
+if nargin < 6, bmodeLims = []; end
+spatial = ~isempty(bmodeLims);
+
+RF  = S.RF(:,:,txIdx);
 Nel = size(RF, 2);
 tus = (S.t0 + (0:size(RF,1)-1)/S.fs) * 1e6;
+tauRow = tau(:).';
+
+if spatial
+    % c*t/2 is the depth a symmetric round trip would come from, which is the
+    % mapping the B-mode applies to these same samples. It is an apparent
+    % depth: tau covers transmit plus receive, so the curve coincides with
+    % the pixel marker only when the transmit leg happens to equal the
+    % receive leg - true for an unsteered plane wave, and not for a steered
+    % or focused transmit, where the whole curve sits off by the difference.
+    % That offset is physical, not a plotting error, hence the axis label.
+    xax  = S.rx_pos(:).' * 1e3;
+    yax  = S.c * tus * 1e-6 / 2 * 1e3;
+    tauY = S.c * tauRow / 2 * 1e3;
+else
+    xax  = 1:Nel;
+    yax  = tus;
+    tauY = tauRow * 1e6;
+end
 
 cla(ax, 'reset');
 % Depth-dependent gain for display only, so shallow echoes do not saturate
 disp_rf = RF ./ max(max(abs(RF), [], 2), 1e-12).^0.7;
-imagesc(ax, 1:Nel, tus, disp_rf);
+imagesc(ax, xax, yax, disp_rf);
 colormap(ax, gray(256));
 set(ax, 'CLim', [-1 1]*max(abs(disp_rf(:)))*0.6 + [-eps eps]);
 hold(ax, 'on');
 
-tauUs = tau(:).' * 1e6;
-ok = isfinite(tauUs);
-plot(ax, find(ok), tauUs(ok), '-', 'Color', [1 .25 .1], 'LineWidth', 2);
-plot(ax, find(ok), tauUs(ok), '.', 'Color', [1 .8 0], 'MarkerSize', 8);
+ok = isfinite(tauY);
+plot(ax, xax(ok), tauY(ok), '-', 'Color', [1 .25 .1], 'LineWidth', 2);
+plot(ax, xax(ok), tauY(ok), '.', 'Color', [1 .8 0], 'MarkerSize', 8);
 if any(~ok)
-    yl = mean(tauUs(ok), 'omitnan');
-    plot(ax, find(~ok), repmat(yl, 1, sum(~ok)), 'x', 'Color', [.4 .4 .4], ...
+    yl = mean(tauY(ok), 'omitnan');
+    plot(ax, xax(~ok), repmat(yl, 1, sum(~ok)), 'x', 'Color', [.4 .4 .4], ...
          'MarkerSize', 5);
+end
+if spatial
+    % Same marker the B-mode panel uses, so the eye can pair the two panels.
+    plot(ax, pt(1)*1e3, pt(2)*1e3, 'o', 'MarkerSize', 10, 'LineWidth', 2, ...
+         'MarkerEdgeColor', [1 .25 .1]);
 end
 hold(ax, 'off');
 % Match B-mode convention: earlier/shallow samples are at the top.
 set(ax, 'YDir', 'reverse');
-xlabel(ax, 'Receive element index');
-ylabel(ax, 'Time [\mus]');
-if any(ok)
-    span = max(max(tauUs(ok)) - min(tauUs(ok)), 0.5);
-    ylim(ax, [min(tauUs(ok)) - 0.8*span - 1, max(tauUs(ok)) + 0.8*span + 1]);
+
+if spatial
+    xlabel(ax, 'x [mm]');
+    ylabel(ax, 'Apparent depth  c t / 2 [mm]');
+    axis(ax, 'image');
+    xlim(ax, bmodeLims(1:2));
+    ylim(ax, bmodeLims(3:4));
+    % The y axis no longer reads in microseconds, so keep the absolute time of
+    % the earliest summed sample in the corner rather than in the title, which
+    % is too narrow for it once the panel is squared off against the B-mode.
+    if any(ok)
+        note = {sprintf(' apex t = %.2f \\mus ', min(tauRow(ok))*1e6)};
+        % A full aperture can be wider than the reconstructed image. Sharing
+        % the B-mode's limits then pushes summed elements out of sight, so
+        % say so rather than let the curve look truncated.
+        nOut = sum(xax(ok) < bmodeLims(1) | xax(ok) > bmodeLims(2));
+        if nOut > 0
+            note{end+1} = sprintf(' %d/%d el. beyond the frame ', nOut, sum(ok));
+        end
+        text(ax, 0.03, 0.97, note, ...
+             'Units', 'normalized', 'VerticalAlignment', 'top', ...
+             'BackgroundColor', [1 1 1], 'Margin', 1, 'FontSize', 9, ...
+             'Color', [.15 .15 .15]);
+    end
+    title(ax, sprintf('Delay curve  (%.2f, %.2f) mm  %d/%d el.', ...
+          pt(1)*1e3, pt(2)*1e3, sum(ok), Nel));
+else
+    xlabel(ax, 'Receive element index');
+    ylabel(ax, 'Time [\mus]');
+    if any(ok)
+        span = max(max(tauY(ok)) - min(tauY(ok)), 0.5);
+        ylim(ax, [min(tauY(ok)) - 0.8*span - 1, max(tauY(ok)) + 0.8*span + 1]);
+    end
+    xlim(ax, [0.5 Nel+0.5]);
+    title(ax, sprintf('Delay curve  (%.2f, %.2f) mm  %d/%d el.', ...
+          pt(1)*1e3, pt(2)*1e3, sum(ok), Nel));
 end
-xlim(ax, [0.5 Nel+0.5]);
-title(ax, sprintf('Delay curve  (%.2f, %.2f) mm  %d/%d el.', ...
-      pt(1)*1e3, pt(2)*1e3, sum(ok), Nel));
 end
 
 %% ======================================================================
@@ -246,23 +316,31 @@ end
 scale = max([max(abs(pre(:))), max(abs(post(:))), eps]);
 gain  = 3.0;
 
+% The coherent sum is drawn to the right of the aligned bundle; both bundle
+% panels then share these limits, so one element keeps the same horizontal
+% position before and after alignment and the two can be read as a pair.
+xBase    = Nel + gain + 3;
+sumWidth = max(3, 0.10*Nel + 2);
+xLim     = [0, xBase + sumWidth + 1];
+
 drawBundle(axPre,  trel*1e6, pre,  ok, scale, gain, tau, tc);
+xlim(axPre, xLim);
 title(axPre, sprintf('Before alignment (window at t = %.2f \\mus)', tc*1e6));
 
 drawBundle(axPost, trel*1e6, post, ok, scale, gain, [], []);
-% Draw the coherent sum to the right of the rotated bundle.
 sumTrace = sum(post(:, ok), 2);
 sScale = max(abs(sumTrace)) + eps;
 hold(axPost, 'on');
-xBase = Nel + gain + 3;
-sumWidth = max(3, 0.10*Nel + 2);
 plot(axPost, xBase + 0.9*sumWidth*sumTrace/sScale, trel*1e6, ...
      '-', 'Color', [.85 .1 .1], 'LineWidth', 1.8);
 plot(axPost, [xBase xBase], [trel(1) trel(end)]*1e6, ':', 'Color', [.6 .6 .6]);
-text(axPost, xBase, trel(1)*1e6, sprintf('\\Sigma peak %.3g', max(abs(sumTrace))), ...
-     'Color', [.85 .1 .1], 'VerticalAlignment', 'top', ...
-     'HorizontalAlignment', 'center', 'FontWeight', 'bold');
-xlim(axPost, [0, xBase + sumWidth + 1]);
+% Label the sum where it is drawn: this panel is the last column, so a title
+% long enough to carry the peak as well gets clipped by the figure edge.
+% Offset inwards too - anchored on the first sample the text is cut by the axes.
+text(axPost, xBase, (trel(1) + 0.05*(trel(end)-trel(1)))*1e6, ...
+     sprintf('\\Sigma %.3g', max(abs(sumTrace))), ...
+     'Color', [.85 .1 .1], 'HorizontalAlignment', 'center', 'FontWeight', 'bold');
+xlim(axPost, xLim);
 hold(axPost, 'off');
 title(axPost, sprintf('After alignment + sum  (%.2f, %.2f) mm', pt(1)*1e3, pt(2)*1e3));
 end

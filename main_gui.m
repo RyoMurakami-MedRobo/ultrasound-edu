@@ -1080,10 +1080,24 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
             note = ['  - ' ME.message];
         end
         tau = tau(1, :);
-        wave_animator('delay_curve', ui.axRF, app.S, k, tau, app.pt);
+        wave_animator('delay_curve', ui.axRF, app.S, k, tau, app.pt, delayViewLims());
         wave_animator('alignment', ui.axPre, ui.axPost, app.S, k, tau, app.pt);
         ui.lblDelayInfo.Text = sprintf('Delays from: %s   %d / %d elements used%s', ...
             name, sum(isfinite(tau)), numel(tau), note);
+    end
+
+    function lims = delayViewLims()
+        %DELAYVIEWLIMS  [xmin xmax zmin zmax] in mm of the delay tab's B-mode.
+        %  The RF panel next to it is drawn on exactly these limits, so the
+        %  two images share a field of view and an aspect ratio. Before the
+        %  first beamforming there is no image yet, so fall back to the
+        %  reconstruction grid the B-mode is about to use.
+        if isempty(app.imgA)
+            [gx, gz] = reconGrid();
+        else
+            gx = app.gx; gz = app.gz;
+        end
+        lims = [gx(1) gx(end) gz(1) gz(end)] * 1e3;
     end
 
     function drawDelayBmode()
@@ -1108,7 +1122,7 @@ setStatus(['Ready. Press [1] Simulate, then [2] Beamform / Compare.' ...
         hold(ax,'off'); axis(ax,'image');
         xlim(ax,[app.gx(1) app.gx(end)]*1e3); ylim(ax,[app.gz(1) app.gz(end)]*1e3);
         xlabel(ax,'x [mm]'); ylabel(ax,'z [mm]');
-        title(ax,'B-mode A: click / drag the beamforming pixel');
+        title(ax,'B-mode A: click / drag the pixel');
         ax.ButtonDownFcn=@onDelayPointPress;
     end
 
