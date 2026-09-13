@@ -11,8 +11,11 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from ultrasound_das import (  # noqa: E402
     SimConfig,
+    alignment_bundles,
+    bundle_gain,
     das_custom_template,
     das_reference,
+    delay_curve_frame,
     recon_grid,
     run_algorithm,
     sim_engine,
@@ -83,6 +86,51 @@ def test_full_aperture_when_fnumber_zero():
     )
     # every active element contributes to every pixel within the record
     assert np.isfinite(delays).mean() > 0.9
+
+
+def test_bundle_gain_scales_with_channel_count():
+    """Mirrors the ``gain`` expression in ``drawAlignment``: a fixed 3.0 buries
+    a sparse bundle, so it scales with the channel count and floors at 0.45."""
+    assert bundle_gain(8) == 0.45                       # floor, traces stay apart
+    assert bundle_gain(64) == 64 / 22
+    assert bundle_gain(512) == 3.0                      # ceiling
+    assert bundle_gain(16) < bundle_gain(32) < bundle_gain(64)
+
+
+def test_alignment_window_holds_the_delay_spread():
+    """The window is the *larger* of three periods of fc and the delay spread,
+    or the "before" panel crops the scatter it exists to show."""
+    S = _sim()
+    gx, gz = recon_grid(x_half_mm=10, nx=1, z_max_mm=26, nz=1)
+    _, tau = das_reference(S.RF[:, :, 0], S.tx[0], S.rx_pos,
+                           np.array([0.0]), np.array([18e-3]),
+                           S.c, S.fs, want_delays=True)
+    tau = tau[0]
+    b = alignment_bundles(S, 0, tau)
+    ok = np.isfinite(tau)
+    spread_us = float(np.max(tau[ok]) - np.min(tau[ok])) * 1e6
+    half_win_us = float(b["trel_us"][-1])
+    assert half_win_us >= 3 / S.probe["fc"] * 1e6 - 1e-12      # floor honoured
+    assert 2 * half_win_us > spread_us                          # curve fits
+    assert b["gain"] == bundle_gain(S.RF.shape[1])              # auto gain
+
+
+def test_delay_curve_frame_maps_onto_the_bmode():
+    """Element positions across, apparent depth c*t/2 down - the mapping that
+    lets the delay panel share the B-mode's frame."""
+    S = _sim()
+    _, tau = das_reference(S.RF[:, :, 0], S.tx[0], S.rx_pos,
+                           np.array([0.0]), np.array([18e-3]),
+                           S.c, S.fs, want_delays=True)
+    x_mm, depth_mm, tau_mm = delay_curve_frame(S, tau[0])
+    assert x_mm.size == S.rx_pos.size
+    assert np.allclose(x_mm, S.rx_pos * 1e3)
+    assert depth_mm.size == S.RF.shape[0]
+    assert np.allclose(depth_mm, S.c * (S.t0 + np.arange(S.RF.shape[0]) / S.fs) / 2 * 1e3)
+    # An unsteered plane wave makes transmit and receive legs equal at the
+    # apex, so c*tau/2 there is the pixel depth itself.
+    ok = np.isfinite(tau_mm)
+    assert abs(float(np.min(tau_mm[ok])) - 18.0) < 0.05
 
 
 if __name__ == "__main__":

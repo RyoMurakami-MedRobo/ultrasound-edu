@@ -15,6 +15,7 @@ Run with ``python -m ultrasound_das`` or ``ultrasound-das-gui``.
 from __future__ import annotations
 
 import importlib
+import math
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -43,6 +44,7 @@ from .wave_animator import (
     alignment_bundles,
     blue_white_red,
     delay_curve_image,
+    delay_curve_frame,
 )
 
 SWEEP_SECONDS = 20.0  # wall-clock duration of one full animation sweep at 1x
@@ -52,7 +54,7 @@ _PRESETS = ("Single point (PSF)", "Wire phantom", "Anechoic cyst", "Custom")
 
 def _preset_data(name: str) -> np.ndarray:
     if name == "Single point (PSF)":
-        return np.array([[0.0, 20.0, 1.0]])
+        return np.array([[0.0, 10.0, 1.0]])
     if name == "Wire phantom":
         XW, ZW = np.meshgrid(np.arange(-8, 9, 4), np.arange(8, 39, 6))
         return np.column_stack([XW.ravel(order="F"), ZW.ravel(order="F"), np.ones(XW.size)])
@@ -65,7 +67,7 @@ def _preset_data(name: str) -> np.ndarray:
         rb[np.hypot(xb - 0, zb - 22) < 5] = 0.0
         D = np.column_stack([xb, zb, rb])
         return np.vstack([D, [-8, 12, 1], [8, 32, 1]])
-    return np.array([[0.0, 20.0, 1.0]])
+    return np.array([[0.0, 10.0, 1.0]])
 
 
 class _Axes:
@@ -92,7 +94,7 @@ class App:
         self.nameA = self.nameB = ""
         self.msA = self.msB = float("nan")
         self.gx = self.gz = None
-        self.pt = np.array([0.0, 20e-3])
+        self.pt = np.array([0.0, 10e-3])
         self.playing = False
         self._play_token = 0
         self._das_token = 0
@@ -103,6 +105,11 @@ class App:
 
         self.v = {}
         self._build()
+        # The Active setup panel exists to mirror controls the current mode may
+        # be hiding, so it has to follow every one of them.
+        for key in ("nel", "pitch", "fc", "bw", "fsfac", "c", "fnum", "rxapod",
+                    "scheme", "angle", "xhalf", "zmin", "zmax", "dr"):
+            self.v[key].trace_add("write", lambda *a: self._refresh_setup_info())
         self._on_scheme_changed()
         self._apply_mode()
         self._apply_preset()
@@ -146,6 +153,9 @@ class App:
         fr.pack(fill="x", pady=1)
         ttk.Label(fr, text=label, width=22, anchor="e").pack(side="left")
         widget.pack(side="left", fill="x", expand=True)
+        # Keep the row frame reachable: Extreme Simple hides individual rows
+        # of panels it otherwise keeps (see _apply_mode).
+        self._row_of[widget] = fr
         return widget
 
     def _num(self, parent, label, key, default, width=10):
@@ -169,10 +179,14 @@ class App:
 
     _SECTION_PACK = dict(fill="x", padx=4, pady=3)
 
-    def _section(self, parent, title):
+    def _section(self, parent, title, level=1):
+        """``level`` is the least detailed control-panel mode that shows this
+        section: 1 Extreme Simple, 2 Simple, 3 Detailed. Mirrors the
+        ``ui.rowLevel`` table in ``main_gui.m``."""
         lf = ttk.LabelFrame(parent, text=title)
         lf.pack(**self._SECTION_PACK)
         self._sections_in_order.append(lf)
+        self._section_level[lf] = level
         return lf
 
     def _show_section(self, sec):
@@ -183,35 +197,48 @@ class App:
             opts["before"] = anchor
         sec.pack(**opts)
 
+    MODES = ("Extreme Simple", "Simple", "Detailed")
+
     def _build_controls(self, p):
         self._sections_in_order = []
         self._section_anchor = {}
+        self._section_level = {}
+        self._row_of = {}
         hdr = self._section(p, "Control panel mode")
-        self._combo(hdr, "Mode", "mode", ("Simple", "Detailed"), "Simple", self._apply_mode)
+        self._combo(hdr, "Mode", "mode", self.MODES, self.MODES[0], self._apply_mode)
 
-        s = self._section(p, "Transducer")
-        self._combo(s, "Elements", "nel", ("16", "32", "64", "128", "192", "256", "512"), "64", self._draw_phantom)
+        s = self._section(p, "Transducer", level=2)
+        self._combo(s, "Elements", "nel",
+                    ("8", "16", "32", "64", "128", "192", "256", "512"), "8",
+                    self._draw_phantom)
         self._num(s, "Centre frequency [MHz]", "fc", 5)
 
-        self.adv_probe = self._section(p, "Transducer (advanced)")
-        self._num(self.adv_probe, "Pitch [mm]", "pitch", 0.30)
+        self.adv_probe = self._section(p, "Transducer (advanced)", level=3)
+        # The pitch, not the centre frequency, keeps the sparse 8-element
+        # default out of the grating lobes: 0.60 mm is 1.95 lambda at 5 MHz,
+        # which throws the replicas to +/-31 deg, outside the 4 mm image.
+        self._num(self.adv_probe, "Pitch [mm]", "pitch", 0.60)
         self._num(self.adv_probe, "Bandwidth -6 dB [%]", "bw", 75)
-        self._num(self.adv_probe, "Speed of sound [m/s]", "c", 1540)
         self._combo(self.adv_probe, "Sampling fs / fc", "fsfac", ("4", "6", "8", "12"), "4")
 
-        s = self._section(p, "Transmit scheme")
+        # Its own section because the speed of sound stays adjustable in
+        # Extreme Simple, where the transducer panels are gone.
+        s = self._section(p, "Medium", level=1)
+        self._num(s, "Speed of sound [m/s]", "c", 1540)
+
+        s = self._section(p, "Transmit scheme", level=2)
         self._combo(s, "Transmit mode", "scheme",
                     ("Plane wave", "Focused", "Diverging"), "Plane wave", self._on_scheme_changed)
         self.w_angle = self._num(s, "Steering angle [deg]", "angle", 0)
-        self.w_focus = self._num(s, "Focal depth F [mm]", "focus", "20")
+        self.w_focus = self._num(s, "Focal depth F [mm]", "focus", "10")
 
-        self.adv_tx = self._section(p, "Transmit (advanced)")
+        self.adv_tx = self._section(p, "Transmit (advanced)", level=3)
         self.w_srcdepth = self._num(self.adv_tx, "Diverging source [mm]", "srcdepth", 10)
         self._check(self.adv_tx, "Single-element transmit", "singleel", False, self._on_scheme_changed)
-        self.w_elidx = self._num(self.adv_tx, "Element index", "elidx", 32)
+        self.w_elidx = self._num(self.adv_tx, "Element index", "elidx", 4)
 
-        s = self._section(p, "Targets (phantom)")
-        self._combo(s, "Preset", "preset", _PRESETS, "Single point (PSF)")
+        s = self._section(p, "Targets (phantom)", level=1)
+        w_preset = self._combo(s, "Preset", "preset", _PRESETS, "Single point (PSF)")
         brow = ttk.Frame(s)
         brow.pack(fill="x", pady=1)
         ttk.Button(brow, text="Apply preset", command=self._apply_preset_refresh).pack(side="left")
@@ -229,38 +256,52 @@ class App:
         ttk.Button(brow2, text="Add row", command=self._add_row).pack(side="left")
         ttk.Button(brow2, text="Delete selected", command=self._del_rows).pack(side="left")
         ttk.Button(brow2, text="Clear all", command=self._clear_rows).pack(side="left")
+        # Everything except the table itself: Extreme Simple edits the target
+        # position and nothing else about the phantom.
+        self._phantom_extras = [self._row_of[w_preset], brow, brow2]
 
-        s = self._section(p, "Reconstruction")
-        self._num(s, "Receive f-number (0=full)", "fnum", 1.5)
+        s = self._section(p, "Reconstruction", level=1)
+        # Full aperture by default: at 8 elements an f-number of 1.5 would
+        # leave only two channels active at the default target depth, which is
+        # exactly what the delay and alignment panels are here to show.
+        w_fnum = self._num(s, "Receive f-number (0=full)", "fnum", 0)
+        self._fnum_row = self._row_of[w_fnum]
         self._num(s, "Dynamic range [dB]", "dr", 50)
 
-        self.adv_recon = self._section(p, "Reconstruction grid (advanced)")
+        self.adv_recon = self._section(p, "Reconstruction grid (advanced)", level=3)
         self._num(self.adv_recon, "Pixels X", "nx", 161)
         self._num(self.adv_recon, "Pixels Z", "nz", 221)
-        self._num(self.adv_recon, "Lateral half-width [mm]", "xhalf", 12)
+        self._num(self.adv_recon, "Lateral half-width [mm]", "xhalf", 4)
         self._num(self.adv_recon, "Depth min [mm]", "zmin", 3)
-        self._num(self.adv_recon, "Depth max [mm]", "zmax", 40)
+        self._num(self.adv_recon, "Depth max [mm]", "zmax", 20)
         self._combo(self.adv_recon, "Receive apodisation", "rxapod", ("rect", "hann"), "rect")
 
-        s = self._section(p, "DAS algorithm comparison")
+        s = self._section(p, "DAS algorithm comparison", level=2)
         algs = tuple(ALGORITHMS)
         self._combo(s, "Algorithm A", "algA", algs, "Reference DAS")
         self._combo(s, "Algorithm B", "algB", ("None",) + algs, "Custom DAS")
 
-        self.adv_algo = self._section(p, "Algorithm (advanced)")
+        self.adv_algo = self._section(p, "Algorithm (advanced)", level=3)
         self._num(self.adv_algo, "Custom module:function", "customfn",
                   "ultrasound_das.das_custom_template:das_custom_template", width=32)
 
-        s = self._section(p, "Run")
+        # Extreme Simple hides nearly every control, so the values actually in
+        # force have to stay legible somewhere on screen.
+        s = self._section(p, "Active setup", level=1)
+        self.setup_info = ttk.Label(s, text="", justify="left", anchor="w")
+        self.setup_info.pack(fill="x")
+        self.setup_warn = ttk.Label(s, text="", justify="left", anchor="w",
+                                    foreground="#bf4d0d")
+        self.setup_warn.pack(fill="x")
+
+        s = self._section(p, "Run", level=1)
         ttk.Button(s, text="[1] Simulate (generate RF)", command=self._on_simulate).pack(fill="x", pady=2)
         ttk.Button(s, text="[2] Beamform / Compare", command=self._on_beamform).pack(fill="x", pady=2)
 
-        self._adv_sections = [self.adv_probe, self.adv_tx, self.adv_recon, self.adv_algo]
-        # Anchor = the next section in build order, so a hidden advanced panel
+        # Anchor = the next section in build order, so a hidden panel
         # re-appears in its original slot rather than at the bottom.
         order = self._sections_in_order
-        for sec in self._adv_sections:
-            i = order.index(sec)
+        for i, sec in enumerate(order):
             self._section_anchor[sec] = order[i + 1] if i + 1 < len(order) else None
 
     def _build_tab_image(self):
@@ -318,7 +359,7 @@ class App:
         e1.pack(side="left")
         e1.bind("<Return>", lambda e: self._on_point_edited())
         ttk.Label(bar, text="Z [mm]").pack(side="left")
-        self.v["ptz"] = tk.StringVar(value="20")
+        self.v["ptz"] = tk.StringVar(value="10")
         e2 = ttk.Entry(bar, textvariable=self.v["ptz"], width=7)
         e2.pack(side="left")
         e2.bind("<Return>", lambda e: self._on_point_edited())
@@ -329,12 +370,73 @@ class App:
     #  events / state
     # ------------------------------------------------------------------
     def _apply_mode(self):
-        simple = self.v["mode"].get() == "Simple"
-        for sec in self._adv_sections:
-            if simple:
-                sec.pack_forget()
-            else:
+        """Show the sections this control-panel mode is entitled to.
+
+        Hidden controls keep their values, so a mode change never alters the
+        simulation - it only changes what can be reached. Mirrors
+        ``applyMode`` in ``main_gui.m``."""
+        try:
+            level = self.MODES.index(self.v["mode"].get()) + 1
+        except ValueError:
+            level = len(self.MODES)
+        for sec, sec_level in self._section_level.items():
+            if sec_level <= level:
                 self._show_section(sec)
+            else:
+                sec.pack_forget()
+
+        # Extreme Simple leaves the target position, the speed of sound and
+        # the dynamic range. The first and last live in panels that carry more
+        # than that, so those two are trimmed rather than hidden.
+        extreme = level == 1
+        for fr in list(self._phantom_extras) + [self._fnum_row]:
+            if extreme:
+                fr.pack_forget()
+            else:
+                fr.pack(fill="x", pady=1)
+        self._refresh_setup_info()
+
+    def _extreme_simple(self):
+        return self.v["mode"].get() == self.MODES[0]
+
+    def _refresh_setup_info(self):
+        """Mirror the controls, including the hidden ones.
+
+        Mirrors ``refreshSetupInfo`` in ``main_gui.m``."""
+        if not hasattr(self, "setup_info"):
+            return
+        try:
+            nel = max(int(round(float(self.v["nel"].get()))), 1)
+        except (TypeError, ValueError):
+            nel = 8
+        pitch = self._f("pitch", 0.60)                    # mm
+        fc_mhz = self._f("fc", 5)
+        c = self._f("c", 1540)
+        lam = c / (fc_mhz * 1e6) * 1e3 if fc_mhz > 0 else float("inf")
+        fsf = self._f("fsfac", 4)
+        half_ap = (nel - 1) / 2 * pitch
+        fnum = self._f("fnum", 0.0)
+        rx_txt = f"f/{fnum:.1f}" if fnum > 0 else "full aperture"
+        self.setup_info.configure(text="\n".join([
+            f"{nel} elements   pitch {pitch:.2f} mm   "
+            f"aperture {-half_ap:+.1f} .. {half_ap:+.1f} mm",
+            f"fc {fc_mhz:.2f} MHz   \u03bb {lam:.2f} mm   "
+            f"pitch = {pitch / lam:.2f} \u03bb   BW {self._f('bw', 75):g}%",
+            f"c {c:g} m/s   fs {fc_mhz * fsf:.1f} MHz ({fsf:g} x fc)   "
+            f"rx {rx_txt}, {self.v['rxapod'].get()}",
+            f"{self.v['scheme'].get()} {self._f('angle', 0):+g}\u00b0   "
+            f"image {-self._f('xhalf', 4):+g} .. {self._f('xhalf', 4):+g} mm, "
+            f"z {self._f('zmin', 3):g} .. {self._f('zmax', 20):g} mm   "
+            f"DR {self._f('dr', 50):g} dB",
+        ]))
+        # Grating lobes appear once the element spacing exceeds a wavelength;
+        # say so here, because the B-mode alone looks like a broken image.
+        if pitch > lam:
+            angle = math.degrees(math.asin(min(lam / pitch, 1.0)))
+            self.setup_warn.configure(
+                text=f"pitch > \u03bb: grating lobes at \u00b1{angle:.0f}\u00b0 from the axis")
+        else:
+            self.setup_warn.configure(text="")
 
     def _on_scheme_changed(self):
         """Enable/disable transmit controls by scheme + single-element, like
@@ -415,7 +517,7 @@ class App:
         ed.bind("<FocusOut>", commit)
 
     def _add_row(self):
-        self.tbl.insert("", "end", values=("0", "20", "1"))
+        self.tbl.insert("", "end", values=("0", "10", "1"))
         self.v["preset"].set("Custom")
         self._draw_phantom()
 
@@ -464,7 +566,7 @@ class App:
             if event.button == 3:              # right-click: delete nearest
                 self._delete_nearest_scatterer(x, z)
                 return
-            if not self.v["clickadd"].get() or z <= 0:
+            if not self.v["clickadd"].get() or self._extreme_simple() or z <= 0:
                 return
             self.tbl.insert("", "end", values=(f"{x:.6g}", f"{z:.6g}", "1"))
             self.v["preset"].set("Custom")
@@ -513,13 +615,13 @@ class App:
         try:
             nel = int(round(float(self.v["nel"].get())))
         except ValueError:
-            nel = 64
-            self.v["nel"].set("64")
-        focus = self._parse_list(self.v["focus"].get()) or [20.0]
+            nel = 8
+            self.v["nel"].set("8")
+        focus = self._parse_list(self.v["focus"].get()) or [10.0]
         D = self._table_data()
         return SimConfig(
             n_elements=nel,
-            pitch=self._f("pitch", 0.30) * 1e-3,
+            pitch=self._f("pitch", 0.60) * 1e-3,
             fc=self._f("fc", 5) * 1e6,
             bandwidth=self._f("bw", 75),
             c=self._f("c", 1540),
@@ -529,20 +631,23 @@ class App:
             focus_mm=focus,
             src_mm=self._f("srcdepth", 10),
             single_element=bool(self.v["singleel"].get()),
-            element_index=int(round(self._f("elidx", 32))),
+            # The field is free text but the array may be far smaller - 8
+            # elements is now the default - and sim_engine would index past
+            # its end. Mirrors the clamp in readCfg.
+            element_index=int(min(max(round(self._f("elidx", 4)), 1), nel)),
             scat_x=D[:, 0] * 1e-3,
             scat_z=D[:, 1] * 1e-3,
             scat_rc=D[:, 2],
-            zmax=self._f("zmax", 40) * 1e-3,
-            fnumber=self._f("fnum", 1.5),
+            zmax=self._f("zmax", 20) * 1e-3,
+            fnumber=self._f("fnum", 0.0),
             rx_apod=self.v["rxapod"].get(),
         )
 
     def _recon_grid(self):
-        xh = self._f("xhalf", 12) * 1e-3
+        xh = self._f("xhalf", 4) * 1e-3
         gx = np.linspace(-xh, xh, int(round(self._f("nx", 161))))
-        z0 = min(self._f("zmin", 3), self._f("zmax", 40) - 1) * 1e-3
-        gz = np.linspace(max(z0, 1e-4), self._f("zmax", 40) * 1e-3, int(round(self._f("nz", 221))))
+        z0 = min(self._f("zmin", 3), self._f("zmax", 20) - 1) * 1e-3
+        gz = np.linspace(max(z0, 1e-4), self._f("zmax", 20) * 1e-3, int(round(self._f("nz", 221))))
         return gx, gz
 
     # ------------------------------------------------------------------
@@ -605,7 +710,7 @@ class App:
         gx, gz = self._recon_grid()
         self.gx, self.gz = gx, gz
         for tx in self.S.tx:
-            tx.fnumber = self._f("fnum", 1.5)
+            tx.fnumber = self._f("fnum", 0.0)
             tx.rx_apod = self.v["rxapod"].get()
 
         self._set_status("Beamforming...")
@@ -648,16 +753,16 @@ class App:
         try:
             nel = int(round(float(self.v["nel"].get())))
         except ValueError:
-            nel = 64
-        ex = (np.arange(nel) - (nel - 1) / 2) * self._f("pitch", 0.30)
+            nel = 8
+        ex = (np.arange(nel) - (nel - 1) / 2) * self._f("pitch", 0.60)
         ax.plot(ex, np.zeros(nel), "s", ms=3, color="0.7", mec="0.3")
         if D.size:
             pos = D[:, 2] >= 0
             ax.scatter(D[pos, 0], D[pos, 1], s=30, marker="o", edgecolors="g", facecolors="#88e088")
             ax.scatter(D[~pos, 0], D[~pos, 1], s=30, marker="o", edgecolors="r", facecolors="#ffb0b0")
-        xh = max(self._f("xhalf", 12), np.max(np.abs(ex)) * 1.1 if nel else 12)
+        xh = max(self._f("xhalf", 4), np.max(np.abs(ex)) * 1.1 if nel else 4)
         ax.set_xlim(-xh, xh)
-        ax.set_ylim(self._f("zmax", 40), -2)
+        ax.set_ylim(self._f("zmax", 20), -2)
         ax.set_xlabel("x [mm]")
         ax.set_ylabel("z [mm]")
         ax.set_title(f"Phantom layout ({D.shape[0]} scatterers)")
@@ -850,9 +955,9 @@ class App:
         self._stop_playback()
         if self.S is None:
             return
-        xh = max(self._f("xhalf", 12) * 1e-3, np.max(np.abs(self.S.rx_pos)) * 1.05)
+        xh = max(self._f("xhalf", 4) * 1e-3, np.max(np.abs(self.S.rx_pos)) * 1.05)
         self.wave = WavePropagation.setup(
-            self.S, self._current_tx(), (-xh, xh), (0.0, self._f("zmax", 40) * 1e-3)
+            self.S, self._current_tx(), (-xh, xh), (0.0, self._f("zmax", 20) * 1e-3)
         )
         self.tslider.configure(to=self.wave.tmax)
         self.tslider.set(0)
@@ -932,6 +1037,19 @@ class App:
     # ------------------------------------------------------------------
     #  delay curve / alignment
     # ------------------------------------------------------------------
+    def _delay_view_lims(self):
+        """``[xmin, xmax, zmin, zmax]`` in mm of the delay tab's B-mode.
+
+        The RF panel next to it is drawn on exactly these limits, so the two
+        images share a field of view and an aspect ratio. Before the first
+        beamforming there is no image yet, so fall back to the reconstruction
+        grid the B-mode is about to use. Mirrors ``delayViewLims``."""
+        if self.imgA is None:
+            gx, gz = self._recon_grid()
+        else:
+            gx, gz = self.gx, self.gz
+        return [gx[0]*1e3, gx[-1]*1e3, gz[0]*1e3, gz[-1]*1e3]
+
     def _update_delay_views(self):
         if self.S is None:
             return
@@ -959,7 +1077,7 @@ class App:
         if self.imgA is None:
             axb.text(0.5, 0.5, "Press [2] Beamform / Compare",
                      transform=axb.transAxes, ha="center", va="center")
-            axb.set_title("B-mode A: select a pixel after beamforming")
+            axb.set_title("B-mode A: select a pixel after beamforming", fontsize=9)
             axb.axis("off")
         else:
             axb.axis("on")
@@ -972,42 +1090,80 @@ class App:
             axb.plot(self.pt[0]*1e3, self.pt[1]*1e3, "o", ms=10,
                      mfc="none", mec="#ff4019", mew=2)
             axb.set(xlabel="x [mm]", ylabel="z [mm]",
-                    title="B-mode A: click / drag the beamforming pixel")
+                    title="B-mode A: click / drag the pixel")
+            axb.title.set_fontsize(9)
+            axb.set_xlim(self.gx[0]*1e3, self.gx[-1]*1e3)
+            axb.set_ylim(self.gz[-1]*1e3, self.gz[0]*1e3)
 
         disp_rf, t_us, tau_us, ok = delay_curve_image(self.S, k, tau)
         nel = disp_rf.shape[1]
-        axrf.imshow(disp_rf, extent=[0.5, nel + 0.5, t_us[-1], t_us[0]], cmap="gray",
-                    aspect="auto", vmin=-np.max(np.abs(disp_rf)) * 0.6, vmax=np.max(np.abs(disp_rf)) * 0.6)
-        idx = np.where(ok)[0]
-        axrf.plot(idx + 1, tau_us[ok], "-", color="#ff4019", lw=2)
-        axrf.plot(idx + 1, tau_us[ok], ".", color="#ffcc00", ms=6)
-        axrf.set_xlabel("Receive element index")
-        axrf.set_ylabel("Time [us]")
+        lims = self._delay_view_lims()
+        scale = float(np.max(np.abs(disp_rf))) * 0.6
+        # Same data, drawn on the B-mode's own frame: element position in mm
+        # across, apparent depth c*t/2 in mm down, equal aspect and identical
+        # limits. A pixel in the B-mode and the apex of its delay curve then
+        # land on the same spot, which is the point of the two side by side.
+        x_mm, depth_mm, tau_mm = delay_curve_frame(self.S, tau)
+        axrf.imshow(disp_rf, extent=[x_mm[0], x_mm[-1], depth_mm[-1], depth_mm[0]],
+                    cmap="gray", aspect="equal", vmin=-scale, vmax=scale)
+        axrf.plot(x_mm[ok], tau_mm[ok], "-", color="#ff4019", lw=2)
+        axrf.plot(x_mm[ok], tau_mm[ok], ".", color="#ffcc00", ms=6)
+        if np.any(~ok):
+            axrf.plot(x_mm[~ok], np.full((~ok).sum(), float(np.mean(tau_mm[ok]))),
+                      "x", color="0.4", ms=5)
+        # Same marker the B-mode panel uses, so the eye can pair the two.
+        axrf.plot(self.pt[0]*1e3, self.pt[1]*1e3, "o", ms=10,
+                  mfc="none", mec="#ff4019", mew=2)
+        axrf.set_xlabel("x [mm]")
+        axrf.set_ylabel("Apparent depth  c t / 2 [mm]")
+        axrf.set_xlim(lims[0], lims[1])
+        axrf.set_ylim(lims[3], lims[2])
         if np.any(ok):
-            span = max(float(np.max(tau_us[ok])-np.min(tau_us[ok])), 0.5)
-            axrf.set_ylim(float(np.max(tau_us[ok])) + .8*span + 1,
-                          float(np.min(tau_us[ok])) - .8*span - 1)
-        else:
-            axrf.set_ylim(t_us[-1], t_us[0])
-        axrf.set_title(f"RF samples for selected pixel\n({self.pt[0]*1e3:.2f}, {self.pt[1]*1e3:.2f}) mm  {ok.sum()}/{nel} el.")
+            # The y axis no longer reads in microseconds, so keep the absolute
+            # time of the earliest summed sample in the corner. A full aperture
+            # can also be wider than the image, which pushes summed elements
+            # out of sight - say so rather than let the curve look truncated.
+            note = [f" apex t = {np.min(tau[ok])*1e6:.2f} us "]
+            n_out = int(np.sum((x_mm[ok] < lims[0]) | (x_mm[ok] > lims[1])))
+            if n_out:
+                note.append(f" {n_out}/{int(ok.sum())} el. beyond the frame ")
+            axrf.text(0.03, 0.97, "\n".join(note), transform=axrf.transAxes,
+                      va="top", ha="left", fontsize=8, color="#262626",
+                      bbox=dict(fc="white", ec="none", pad=1.0))
+        axrf.set_title(f"Delay curve  ({self.pt[0]*1e3:.2f}, {self.pt[1]*1e3:.2f}) mm"
+                       f"  {ok.sum()}/{nel} el.", fontsize=9)
 
         bundles = alignment_bundles(self.S, k, tau)
         if bundles is not None:
-            self._draw_bundle(axpre, bundles, bundles["pre"], show_tau=True)
-            axpre.set_title(f"Before alignment (window at t = {bundles['tc']*1e6:.2f} us)")
-            self._draw_bundle(axpost, bundles, bundles["post"], show_tau=False)
             st = bundles["sum_trace"]
             ss = np.max(np.abs(st)) + np.finfo(float).eps
             nel_b = bundles["pre"].shape[1]
+            # The coherent sum is drawn to the right of the aligned bundle; both
+            # bundle panels then share these limits, so one element keeps the
+            # same horizontal position before and after alignment.
             xbase = nel_b + bundles["gain"] + 3
             sum_width = max(3, 0.10*nel_b + 2)
+            xlim = (0, xbase + sum_width + 1)
+
+            self._draw_bundle(axpre, bundles, bundles["pre"], show_tau=True)
+            axpre.set_xlim(*xlim)
+            axpre.set_title(f"Before alignment (window at t = {bundles['tc']*1e6:.2f} us)",
+                            fontsize=9)
+
+            self._draw_bundle(axpost, bundles, bundles["post"], show_tau=False)
             axpost.plot(xbase + 0.9*sum_width*st/ss, bundles["trel_us"], "-",
                         color="#d91a1a", lw=1.8)
             axpost.axvline(xbase, color=".6", ls=":")
-            axpost.text(xbase, bundles["trel_us"][0], f"sum peak {np.max(np.abs(st)):.3g}",
-                        color="#d91a1a", ha="center", va="top", fontsize=8)
-            axpost.set_xlim(0, xbase + sum_width + 1)
-            axpost.set_title(f"After alignment + sum  ({self.pt[0]*1e3:.2f}, {self.pt[1]*1e3:.2f}) mm")
+            # Label the sum where it is drawn: this panel is the last column, so
+            # a title long enough to carry the peak too gets clipped. Offset
+            # inwards, or the text is cut by the axes edge.
+            trel = bundles["trel_us"]
+            axpost.text(xbase, trel[0] + 0.05*(trel[-1]-trel[0]),
+                        f"\u03a3 {np.max(np.abs(st)):.3g}",
+                        color="#d91a1a", ha="center", fontsize=8, fontweight="bold")
+            axpost.set_xlim(*xlim)
+            axpost.set_title(f"After alignment + sum  "
+                             f"({self.pt[0]*1e3:.2f}, {self.pt[1]*1e3:.2f}) mm", fontsize=9)
         self.ax_dl.draw()
         self.lbl_delay.configure(
             text=f"Delays from: {name}   {np.isfinite(tau).sum()} / {tau.size} elements used"

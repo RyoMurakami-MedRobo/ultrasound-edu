@@ -26,7 +26,10 @@ import numpy as np
 
 from .das_reference import tx_arrival_time
 
-__all__ = ["WavePropagation", "delay_curve_image", "alignment_bundles", "blue_white_red"]
+__all__ = [
+    "WavePropagation", "delay_curve_image", "delay_curve_frame",
+    "alignment_bundles", "bundle_gain", "blue_white_red",
+]
 
 _MAXSCAT = 30
 
@@ -176,13 +179,51 @@ def delay_curve_image(result, tx_idx, tau):
     return disp_rf, t_us, tau * 1e6, ok
 
 
-def alignment_bundles(result, tx_idx, tau, n_periods=5, n_samples=401, gain=3.0):
+def delay_curve_frame(result, tau):
+    """Spatial mapping of the delay-curve panel onto the B-mode's own frame.
+
+    Returns ``(x_mm, depth_mm, tau_depth_mm)``: the receive element lateral
+    positions, the apparent depth ``c*t/2`` of every RF sample, and the
+    apparent depth of the sample each element contributes. Mirrors the
+    ``bmodeLims`` branch of ``drawDelayCurve``.
+
+    ``c*t/2`` is the depth a *symmetric* round trip would come from, which is
+    the mapping the B-mode applies to these same samples. It is an apparent
+    depth: ``tau`` covers transmit plus receive, so the curve coincides with
+    the pixel marker only when the transmit leg happens to equal the receive
+    leg - true for an unsteered plane wave, and not for a steered or focused
+    transmit, where the whole curve sits off by the difference. That offset
+    is physical, not a plotting error, hence the axis label in ``gui.py``.
+    """
+    S = result
+    rf_rows = S.RF.shape[0]
+    t_s = S.t0 + np.arange(rf_rows) / S.fs
+    tau = np.asarray(tau, dtype=float).ravel()
+    x_mm = np.asarray(S.rx_pos, dtype=float).ravel() * 1e3
+    return x_mm, S.c * t_s / 2.0 * 1e3, S.c * tau / 2.0 * 1e3
+
+
+def bundle_gain(nel):
+    """Trace amplitude in element-index units for a bundle of ``nel`` channels.
+
+    A fixed 3.0 reads as a dense bundle across 64 channels but buries an
+    8-channel one, where neighbours would overlap several deep, so scale it
+    with the channel count and keep the traces clear of each other at the low
+    end. Mirrors the ``gain`` expression in ``drawAlignment``."""
+    return max(0.45, min(3.0, nel / 22.0))
+
+
+def alignment_bundles(result, tx_idx, tau, n_periods=3, n_samples=401, gain=None):
     """Before/after alignment waveform bundles.
 
     Returns a dict with ``trel_us``, ``pre`` [Nsamp x Nel], ``post``
     [Nsamp x Nel], ``ok`` mask, ``scale``, ``gain``, ``tc`` (window centre
     time), ``sum_trace`` (coherent sum of aligned active channels).
-    Mirrors ``drawAlignment`` (data only)."""
+    Mirrors ``drawAlignment`` (data only).
+
+    ``gain=None`` derives the trace amplitude from the channel count via
+    :func:`bundle_gain`; ``n_periods`` is only the *floor* of the window,
+    which widens to hold the delay spread."""
     S = result
     RF = S.RF[:, :, tx_idx]
     nel = RF.shape[1]
@@ -193,8 +234,18 @@ def alignment_bundles(result, tx_idx, tau, n_periods=5, n_samples=401, gain=3.0)
     if not np.any(ok):
         return None
 
-    trel = np.linspace(-n_periods / fc, n_periods / fc, n_samples)
     tc = float(np.mean(tau[ok]))
+    # The window has to contain the delay curve, or the "before" panel crops
+    # the very scatter it exists to show - a wide aperture at shallow depth
+    # spreads the delays over far more than a few periods. The floor is
+    # ``n_periods`` periods of the centre frequency (three: roughly two pulse
+    # lengths at the bandwidths this tool uses), so a wavelet stays readable
+    # without dwarfing the curve when the centre frequency is low.
+    spread = float(np.max(tau[ok]) - np.min(tau[ok]))
+    half_win = max(n_periods / fc, 0.65 * spread + 1.0 / fc)
+    trel = np.linspace(-half_win, half_win, n_samples)
+    if gain is None:
+        gain = bundle_gain(nel)
 
     pre = np.zeros((trel.size, nel))
     post = np.zeros((trel.size, nel))
