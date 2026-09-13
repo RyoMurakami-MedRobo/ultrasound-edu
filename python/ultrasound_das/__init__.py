@@ -19,6 +19,8 @@ from .wave_animator import (
     alignment_bundles,
     blue_white_red,
     delay_curve_image,
+    delay_curve_frame,
+    bundle_gain,
 )
 
 __version__ = "1.0.0"
@@ -44,6 +46,8 @@ __all__ = [
     "ALGORITHMS",
     "WavePropagation",
     "delay_curve_image",
+    "delay_curve_frame",
+    "bundle_gain",
     "alignment_bundles",
     "blue_white_red",
 ]

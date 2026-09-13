@@ -69,6 +69,8 @@ The status bar reports whether MUST was detected. Without it the backend reads
 | `wave_animator.m` | Wave propagation, delay curve and alignment drawing |
 | `setup_must.m` | Downloads MUST and adds it to the MATLAB path |
 | `validation/validate_must_vs_mock.m` | Quantitative mock-vs-MUST agreement check (see below) |
+| `validation/validate_execution_trace.m` | Checks a DAS execution trace against its own coherent sum |
+| `docs/HW3_DAS.md` | HW3 experiment guide: custom trace hooks and Field II scope |
 | `paper/` | LaTeX source of the accompanying arXiv-style paper |
 | `python/` | Python port of the tool (mock backend only) + parity tests against MATLAB |
 | `CLAUDE.md` | How the MATLAB and Python implementations are kept in sync |
@@ -79,7 +81,8 @@ The status bar reports whether MUST was detected. Without it the backend reads
 
 1. **Set the acquisition** in the left column — elements, centre frequency,
    transmit mode (plane / focused / diverging / single element), steering
-   angle, focal depth.
+   angle, focal depth. In **Extreme Simple** mode these are preset for you;
+   switch to Simple or Detailed to reach them.
 2. **Place the targets** — apply a preset (single point / wire phantom /
    anechoic cyst) or edit the table directly. In the phantom view you can
    **left-click to add** a scatterer and **right-click for an add / delete
@@ -87,20 +90,57 @@ The status bar reports whether MUST was detected. Without it the backend reads
 3. **Press `[1] Simulate`** to generate the RF data.
 4. **Press `[2] Beamform / Compare`** to run algorithms A and B side by side.
 
-### Simple and Detailed control modes
+### Control panel modes
 
-The **Control panel mode** selector at the top switches between:
+The **Control panel mode** selector at the top switches between three levels
+of detail:
 
-- **Simple** — elements, centre frequency, transmit mode, steering angle,
-  focal depth, the phantom table, receive f-number, dynamic range, algorithm
-  choice and the run buttons. Everything fits without scrolling.
-- **Detailed** — additionally exposes pitch, bandwidth, speed of sound,
-  sampling ratio, diverging-source depth, single-element transmit,
-  reconstruction grid size and extent, receive apodisation, the custom
-  function name and the backend override.
+- **Extreme Simple** (the default) — the target position, the speed of sound
+  and the dynamic range. Nothing else. Everything the beamformer needs is
+  already set up; this mode is for looking at what DAS *does*, not at how the
+  acquisition is configured.
+- **Simple** — adds elements, centre frequency, transmit mode, steering angle,
+  focal depth, receive f-number and the algorithm choice.
+- **Detailed** — adds pitch, bandwidth, sampling ratio, diverging-source
+  depth, single-element transmit, reconstruction grid size and extent,
+  receive apodisation and the custom function name.
 
-Hidden panels keep their values, so Simple mode runs with whatever the
-advanced panels were last set to.
+Hidden controls keep their values, so **changing mode never changes the
+simulation** — it only changes what you can reach.
+
+Because Extreme Simple hides nearly everything, an **Active setup** panel is
+visible in every mode and reports what is actually in force: element count,
+pitch, aperture, centre frequency, wavelength, pitch in wavelengths,
+bandwidth, speed of sound, sampling, receive aperture, transmit scheme, image
+extent and dynamic range.
+
+### The default setup, and why
+
+| | value |
+|---|---|
+| elements | 8 |
+| pitch | 0.60 mm (1.95 λ at 5 MHz) |
+| aperture | −2.1 … +2.1 mm |
+| centre frequency | 5 MHz |
+| target | a single point at (0, 10) mm |
+| image | −4 … +4 mm, z 3 … 20 mm |
+| receive f-number | 0 (full aperture) |
+
+**Eight elements** is the point of the defaults: the delay curve and the
+before/after alignment bundles are legible only when you can follow each
+channel individually. The receive f-number is 0 to match — at 8 elements an
+f-number of 1.5 would leave only two channels active at the target depth.
+
+A sparse array pays for it in **grating lobes**, which appear once the element
+spacing exceeds a wavelength. At 0.60 mm the replicas sit at ±31° — about
+6 mm off axis at the target depth, outside the 4 mm image — and the Active
+setup panel names the condition rather than letting the B-mode just look
+broken. Widen the image and they come back into view; that is the array being
+honest, not a rendering bug.
+
+Shrinking the pitch further stops helping: the worst off-target level
+plateaus around −13 dB, which is the sidelobe floor of a uniform aperture, not
+a grating lobe. Only apodisation reaches that floor.
 
 ### Tabs
 
@@ -114,9 +154,30 @@ advanced panels were last set to.
   (blue). Receive elements light up as the echo reaches them. Playback is
   paced against real time; at 1x one full sweep takes about 20 seconds, and
   the speed selector offers 0.25x to 4x.
-- **Delay curve & alignment** — the delay curve showing which sample of each
-  element is summed, the misaligned waveform bundle, and the delay-corrected
-  bundle together with its coherent sum.
+- **Delay curve & alignment** — four panels read left to right as one
+  picture:
+  1. **B-mode A** — click or drag to choose the pixel being reconstructed.
+  2. **Delay curve** — the RF data with the samples DAS sums for that pixel
+     drawn on top, on *the same frame as the B-mode beside it*: element
+     position in mm across, apparent depth `c·t/2` in mm down, same limits and
+     same aspect. The pixel carries the B-mode's own marker, so the two panels
+     pair up by eye.
+  3. **Before alignment** — those samples as a waveform bundle, scattered in
+     time along the delay curve.
+  4. **After alignment + sum** — the same bundle delay-corrected into phase,
+     with the coherent sum beside it.
+
+  The depth axis of panel 2 is an *apparent* depth: `tau` covers transmit plus
+  receive, so the curve meets the pixel marker only when the two legs are
+  equal. That holds for an unsteered plane wave; steer it, or focus it, and
+  the whole curve sits off by the difference. The offset is physical, which is
+  why the axis is labelled `c t / 2` rather than `z`.
+
+- **DAS execution replay** — the recorded execution of the selected
+  beamformer: the actual per-channel contributions at the summation site, the
+  coherent accumulation along a scan line, and the envelope it returns. See
+  [`docs/HW3_DAS.md`](docs/HW3_DAS.md) for the trace hook your own
+  implementation should keep.
 
 ---
 
@@ -283,10 +344,3 @@ If this tool is useful in teaching or research, please cite it - see
 [`CITATION.cff`](CITATION.cff) or the draft paper in [`paper/`](paper/). This
 project is MIT-licensed (see [`LICENSE`](LICENSE)); MUST itself is licensed
 separately under LGPLv3 by its authors.
-
-### HW3 and automatic DAS replay
-
-Simulate now opens and plays the wave animation. Beamform / Compare opens
-the recorded execution of the selected DAS, with actual channel contributions
-and coherent accumulation. Supports 128, 256 and 512 elements.
-See [HW3 experiment guide](docs/HW3_DAS.md) for custom trace hooks and Field II scope.

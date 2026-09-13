@@ -56,7 +56,10 @@ Keep these in mind so a future edit does not "fix" them back:
   in `wave_animator.py` on purpose.
 - **GUI toolkit** — `uifigure`/`uitabgroup`/`uitable` in MATLAB;
   `tk.Tk`/`ttk.Notebook`/`ttk.Treeview` in Python. Match structure and
-  behaviour, not widget-for-widget API.
+  behaviour, not widget-for-widget API. Layout fixes that only one toolkit
+  needs stay on that side: MATLAB's `uiaxes` clip an over-long title, while
+  Matplotlib overlaps neighbouring ones, so the four-panel delay tab sets an
+  explicit title font size in `gui.py` and nothing in `wave_animator.m`.
 - **`wave_animator.py` splits compute from drawing**; `wave_animator.m` mixes
   them. Numeric changes → `wave_animator.py`; drawing changes → `gui.py`.
 - **Anechoic-cyst preset RNG** — `rng(0)` in MATLAB vs.
